@@ -1,0 +1,19 @@
+# Sample settings. The app reads and writes its own copy at:
+#   ~/Library/Application Support/virgo_ai/config.toml
+# (created automatically on first run). Copy this file there if you want to
+# start from these values.
+
+ollama_url = "http://localhost:11434"
+planner_model = "qwen3:8b"
+executor_model = "qwen2.5-coder:7b"
+
+# Leave empty to use ~/Library/Application Support/virgo_ai/memory
+memory_dir = ""
+
+num_ctx = 8192
+keep_alive = "10m"
+use_planner = true
+
+# Needs a thinking-capable planner (qwen3, deepseek-r1, ...).
+# Set to false if your planner model does not support thinking.
+planner_think = true

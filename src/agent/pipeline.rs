@@ -51,7 +51,7 @@ pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
     ChatRequest {
         model: cfg.planner_model.clone(),
         messages,
-        stream: false,
+        stream: true,
         think: cfg.planner_think.then_some(true),
         options: Options { num_ctx: cfg.num_ctx },
         keep_alive: cfg.keep_alive.clone(),
@@ -74,7 +74,7 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         model: cfg.executor_model.clone(),
         messages,
         stream: true,
-        think: None,
+        think: cfg.executor_think.then_some(true),
         options: Options { num_ctx: cfg.num_ctx },
         keep_alive: cfg.keep_alive.clone(),
     }

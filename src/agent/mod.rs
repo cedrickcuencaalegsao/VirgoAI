@@ -1,7 +1,9 @@
 pub mod pipeline;
 
+use serde::{Deserialize, Serialize};
+
 /// Who a chat bubble belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
     User,
     /// The planner model's output.
@@ -11,14 +13,29 @@ pub enum Role {
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
+    /// The model's reasoning, kept separate from the answer.
+    #[serde(default)]
+    pub thinking: String,
+    /// How long the model thought for, once it has finished.
+    #[serde(default)]
+    pub think_secs: Option<f32>,
+    /// Whether the reasoning panel is expanded (UI state, not saved).
+    #[serde(skip)]
+    pub show_thinking: bool,
 }
 
 impl ChatMessage {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
-        Self { role, content: content.into() }
+        Self {
+            role,
+            content: content.into(),
+            thinking: String::new(),
+            think_secs: None,
+            show_thinking: false,
+        }
     }
 }

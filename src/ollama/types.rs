@@ -36,7 +36,7 @@ pub struct ChatRequest {
     pub keep_alive: String,
 }
 
-/// One JSON object from `/api/chat` (a single reply, or one line of a stream).
+/// One line of the `/api/chat` stream.
 #[derive(Debug, Deserialize)]
 pub struct ChatChunk {
     #[serde(default)]
@@ -47,10 +47,13 @@ pub struct ChatChunk {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct ChunkMessage {
     #[serde(default)]
     pub content: String,
+    /// Filled when the request has `think: true` and the model supports it.
+    #[serde(default)]
+    pub thinking: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +69,9 @@ pub struct TagModel {
 /// What the UI receives while a reply streams in.
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
+    /// A piece of the model's reasoning.
+    Thinking(String),
+    /// A piece of the visible answer.
     Token(String),
     Done,
     Error(String),

@@ -81,22 +81,6 @@ pub async fn list_models(base_url: String) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// Non-streaming chat call. Used for the planner.
-pub async fn chat_once(base_url: String, req: ChatRequest) -> Result<String, String> {
-    let resp = http()
-        .post(endpoint(&base_url, "api/chat"))
-        .json(&req)
-        .send()
-        .await
-        .map_err(|e| cannot_reach(&base_url, &e))?;
-    let resp = ensure_ok(resp).await?;
-    let chunk: ChatChunk = resp.json().await.map_err(|e| describe(&e))?;
-    if let Some(err) = chunk.error {
-        return Err(err);
-    }
-    Ok(chunk.message.map(|m| m.content).unwrap_or_default())
-}
-
 /// Load models into memory by sending a request with no messages.
 pub async fn warm_up(
     base_url: String,
@@ -159,11 +143,14 @@ fn parse_line(line: &[u8]) -> Option<StreamEvent> {
     if chunk.done {
         return Some(StreamEvent::Done);
     }
-    let content = chunk.message.map(|m| m.content).unwrap_or_default();
-    if content.is_empty() {
-        None
+
+    let message = chunk.message.unwrap_or_default();
+    if !message.content.is_empty() {
+        Some(StreamEvent::Token(message.content))
+    } else if !message.thinking.is_empty() {
+        Some(StreamEvent::Thinking(message.thinking))
     } else {
-        Some(StreamEvent::Token(content))
+        None
     }
 }
 

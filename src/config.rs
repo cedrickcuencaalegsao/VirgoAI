@@ -15,6 +15,7 @@ pub struct Config {
     pub keep_alive: String,
     pub use_planner: bool,
     pub planner_think: bool,
+    pub executor_think: bool,
 }
 
 impl Default for Config {
@@ -28,15 +29,27 @@ impl Default for Config {
             keep_alive: "10m".into(),
             use_planner: true,
             planner_think: true,
+            executor_think: false,
         }
     }
 }
 
-/// `~/Library/Application Support/virgo_ai` on macOS.
+fn data_root() -> PathBuf {
+    dirs::data_dir().unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// `~/Library/Application Support/VirgoAI` on macOS.
 pub fn app_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("virgo_ai")
+    data_root().join("VirgoAI")
+}
+
+/// Before the rename the app stored its data in `local-agent`. Move it over once.
+fn migrate_legacy_dir() {
+    let old = data_root().join("local-agent");
+    let new = app_dir();
+    if old.exists() && !new.exists() {
+        let _ = fs::rename(old, new);
+    }
 }
 
 impl Config {
@@ -46,6 +59,7 @@ impl Config {
 
     /// Load the config file, creating it with defaults on first run.
     pub fn load() -> Self {
+        migrate_legacy_dir();
         match fs::read_to_string(Self::path()) {
             Ok(text) => toml::from_str::<Config>(&text).unwrap_or_default(),
             Err(_) => {

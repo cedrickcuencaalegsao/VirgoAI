@@ -42,6 +42,8 @@ pub enum Message {
     Stop,
     Stream(StreamEvent),
     ToggleThinking(usize),
+    /// Put text (a whole reply or one code block) on the clipboard.
+    Copy(String),
     PlannerSelected(String),
     ExecutorSelected(String),
     RefreshModels,
@@ -200,6 +202,10 @@ impl App {
             Message::Send => self.send(),
             Message::Stop => self.stop(),
             Message::Stream(event) => self.on_stream(event),
+            Message::Copy(content) => {
+                self.status = "Copied to clipboard".into();
+                iced::clipboard::write(content)
+            }
             Message::ToggleThinking(index) => {
                 if let Some(m) = self.messages.get_mut(index) {
                     m.show_thinking = !m.show_thinking;

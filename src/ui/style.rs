@@ -110,6 +110,16 @@ pub fn thinking_box(theme: &Theme) -> container::Style {
     )
 }
 
+/// Fenced code blocks inside replies.
+pub fn code_block(theme: &Theme) -> container::Style {
+    let p = theme.extended_palette();
+    surface(
+        p.background.base.color,
+        alpha(p.background.strong.color, 0.5),
+        10.0,
+    )
+}
+
 pub fn composer(theme: &Theme) -> container::Style {
     let p = theme.extended_palette();
     surface(

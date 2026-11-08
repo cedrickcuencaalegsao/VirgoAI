@@ -4,7 +4,7 @@ use iced::widget::{
 };
 use iced::{Element, Length, Theme};
 
-use super::style;
+use super::{markdown, style};
 use crate::agent::{ChatMessage, Role};
 use crate::app::{App, Message};
 
@@ -202,8 +202,16 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
     let header = row![
         text(label).size(12).font(style::bold()).style(style::accent),
         text(model).size(11).style(style::dim),
+        horizontal_space(),
+        button(text("Copy").size(11))
+            .padding([3, 10])
+            .on_press_maybe(
+                (!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone()))
+            )
+            .style(style::ghost_button),
     ]
-    .spacing(8);
+    .spacing(8)
+    .align_y(Vertical::Center);
 
     let mut body = column![header].spacing(8);
 
@@ -220,7 +228,7 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
         );
     }
     if !msg.content.is_empty() {
-        body = body.push(text(msg.content.as_str()).size(15));
+        body = body.push(markdown::view(&msg.content));
     }
 
     container(body)

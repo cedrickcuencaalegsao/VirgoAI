@@ -7,6 +7,7 @@ A native macOS desktop app built with **Rust** and **iced** that talks to a loca
 - **Live thinking indicator**: while a model reasons, the bubble shows an animated `Thinking...` with a running timer. The reasoning streams into a collapsible panel; when the answer starts it collapses to `Thought for 4.2s` (click Show to reopen).
 - **Planner then executor**: both stages stream. The plan appears in its own card, then the answer streams below it. Stop cancels either stage.
 - **Model pickers** fed from Ollama's installed models.
+- **Readable replies**: model output is rendered as markdown (headings, lists, bold, inline code, code blocks). Every code block has a Copy button, and each reply has a Copy button for the whole text.
 - **Chat history**: every conversation is saved as a JSON file and listed in the sidebar; click to reopen, x to delete.
 - **Markdown memory**: notes are `.md` files; `profile.md` is always sent, other notes are chosen by keyword match. Edit them on the Memory page, or use "Remember last reply".
 - **Modern dark UI**: custom violet theme, rounded cards, sidebar navigation (Chat, Memory, Settings).
@@ -36,6 +37,7 @@ virgo-ai/
         ├── style.rs         # theme + all custom styles
         ├── nav.rs           # sidebar
         ├── chat.rs          # conversation, thinking panel, composer
+        ├── markdown.rs      # markdown renderer + code blocks with Copy
         ├── memory.rs        # notes list + editor
         └── settings.rs      # settings form
 ```

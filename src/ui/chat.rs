@@ -1,7 +1,7 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, column, container, horizontal_space, pick_list, row, scrollable, text, text_editor,
-    text_input,
+    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
+    text_editor, text_input,
 };
 use iced::{Element, Length, Theme};
 
@@ -107,6 +107,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     // ---- composer ----
     let remember = row![
+        checkbox("Edit mode (plan, review, then apply code)", app.edit_mode)
+            .on_toggle_maybe(
+                (app.project.is_some() && !app.is_busy()).then_some(Message::ToggleEditMode)
+            )
+            .size(16)
+            .text_size(12),
         horizontal_space(),
         button(icons::label(
             icons::database(),
@@ -117,7 +123,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .padding([6, 12])
         .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
         .style(style::ghost_button),
-    ];
+    ]
+    .align_y(Vertical::Center);
 
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {

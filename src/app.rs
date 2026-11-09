@@ -37,6 +37,8 @@ pub enum Message {
     /// Animation clock, only runs while a model is working.
     Tick,
 
+    ToggleEditMode(bool),
+
     // Chat
     NewChat,
     OpenChat(String),
@@ -116,6 +118,9 @@ pub struct App {
     pub num_ctx_input: String,
     pub store: MemoryStore,
 
+    /// When on, every message uses the plan -> review -> code workflow.
+    pub edit_mode: bool,
+
     pub screen: Screen,
     pub phase: Phase,
     pub status: String,
@@ -192,6 +197,7 @@ impl App {
             cfg,
             num_ctx_input,
             store,
+            edit_mode: false,
             screen: Screen::Chat,
             phase: Phase::Idle,
             status: "Ready".into(),
@@ -271,6 +277,11 @@ impl App {
             }
             Message::Tick => {
                 self.tick = self.tick.wrapping_add(1);
+                Task::none()
+            }
+
+            Message::ToggleEditMode(value) => {
+                self.edit_mode = value;
                 Task::none()
             }
 
@@ -613,7 +624,7 @@ impl App {
             Some(rest) => (true, rest.trim().to_string()),
             None => (false, raw),
         };
-        self.intent = if forced && self.project.is_some() {
+        self.intent = if self.project.is_some() && (forced || self.edit_mode) {
             Intent::Change
         } else {
             pipeline::classify(&text, self.project.is_some())
@@ -718,6 +729,25 @@ impl App {
                     .map(|m| pipeline::strip_think_tags(&m.content))
                     .unwrap_or_default();
 
+                if self.intent == Intent::Change {
+                    if let Some(m) = self.messages.last_mut() {
+                        m.content = plan.clone();
+                    }
+                    self.phase = Phase::Idle;
+                    self.reviewing = true;
+                    self.plan_editor = text_editor::Content::with_text(&plan);
+                    self.status = if plan.is_empty() {
+                        "The planner gave no plan. Write one below (or leave it empty), then press Apply plan.".into()
+                    } else {
+                        format!(
+                            "Plan ready from {}. Edit it, then press Apply plan to run {}.",
+                            self.cfg.planner_model, self.cfg.executor_model
+                        )
+                    };
+                    self.save_chat();
+                    return scroll_to_end();
+                }
+
                 if plan.is_empty() {
                     let drop_it = self.messages.last().is_some_and(|m| m.thinking.is_empty());
                     if drop_it {
@@ -729,17 +759,6 @@ impl App {
                 if let Some(m) = self.messages.last_mut() {
                     m.content = plan.clone();
                 }
-
-                if self.intent == Intent::Change {
-                    // Pause here: the user edits the plan, then presses Run plan.
-                    self.phase = Phase::Idle;
-                    self.reviewing = true;
-                    self.plan_editor = text_editor::Content::with_text(&plan);
-                    self.status = "Edit the plan if you like, then press Run plan".into();
-                    self.save_chat();
-                    return scroll_to_end();
-                }
-
                 self.start_executor(Some(plan))
             }
             Phase::Executing => {

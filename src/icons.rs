@@ -90,3 +90,6 @@ icon_fn!(send, "send.svg");
 icon_fn!(square, "square.svg");
 icon_fn!(trash_2, "trash-2.svg");
 icon_fn!(paperclip, "paperclip.svg");
+icon_fn!(eye, "eye.svg");
+icon_fn!(lightbulb, "lightbulb.svg");
+icon_fn!(undo_2, "undo-2.svg");

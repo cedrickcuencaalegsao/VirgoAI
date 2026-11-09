@@ -1,4 +1,5 @@
 pub mod chat;
+pub mod code_panel;
 pub mod markdown;
 pub mod memory;
 pub mod nav;

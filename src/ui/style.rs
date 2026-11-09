@@ -40,6 +40,16 @@ pub fn dim(theme: &Theme) -> text::Style {
     text::Style { color: Some(alpha(theme.palette().text, 0.6)) }
 }
 
+/// Green text (AI changes).
+pub fn success(theme: &Theme) -> text::Style {
+    text::Style { color: Some(theme.palette().success) }
+}
+
+/// Red text (removed lines).
+pub fn danger_text(theme: &Theme) -> text::Style {
+    text::Style { color: Some(theme.palette().danger) }
+}
+
 /// Brand colour text.
 pub fn accent(theme: &Theme) -> text::Style {
     text::Style { color: Some(theme.palette().primary) }
@@ -118,6 +128,43 @@ pub fn code_block(theme: &Theme) -> container::Style {
         alpha(p.background.strong.color, 0.5),
         10.0,
     )
+}
+
+/// The scrolling code area.
+pub fn code_area(theme: &Theme) -> container::Style {
+    let p = theme.extended_palette();
+    surface(
+        p.background.base.color,
+        alpha(p.background.strong.color, 0.5),
+        12.0,
+    )
+}
+
+/// Line added by the model: green.
+pub fn row_added(theme: &Theme) -> container::Style {
+    let p = theme.extended_palette();
+    container::Style {
+        background: Some(Background::Color(alpha(p.success.base.color, 0.16))),
+        ..container::Style::default()
+    }
+}
+
+/// Original line that the model replaced or deleted: red.
+pub fn row_removed(theme: &Theme) -> container::Style {
+    let p = theme.extended_palette();
+    container::Style {
+        background: Some(Background::Color(alpha(p.danger.base.color, 0.13))),
+        ..container::Style::default()
+    }
+}
+
+/// The line the suggestion bar is working on.
+pub fn row_selected(theme: &Theme) -> container::Style {
+    let p = theme.extended_palette();
+    container::Style {
+        background: Some(Background::Color(alpha(p.primary.base.color, 0.14))),
+        ..container::Style::default()
+    }
 }
 
 pub fn composer(theme: &Theme) -> container::Style {

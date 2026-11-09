@@ -1,6 +1,7 @@
 mod agent;
 mod app;
 mod chats;
+mod code;
 mod config;
 mod icons;
 mod memory;
@@ -13,6 +14,6 @@ fn main() -> iced::Result {
         .subscription(app::App::subscription)
         .theme(app::App::theme)
         .antialiasing(true)
-        .window_size(iced::Size::new(1280.0, 780.0))
+        .window_size(iced::Size::new(1480.0, 820.0))
         .run_with(app::App::new)
 }

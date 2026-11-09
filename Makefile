@@ -21,7 +21,7 @@ LUCIDE_URL  := https://raw.githubusercontent.com/lucide-icons/lucide/main/icons
 # Icons the app itself uses (downloaded by `make init`)
 DEFAULT_ICONS := folder-open folder file-text chevron-right chevron-down refresh-cw x \
 	panel-right check plus message-square database sliders-horizontal copy send square \
-	trash-2 paperclip
+	trash-2 paperclip eye lightbulb undo-2
 
 # ---------------------------------------------------------------------------
 # Cargo shortcuts

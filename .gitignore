@@ -1,1 +1,13 @@
 /target
+/build
+*.log
+*.tmp
+*.bak
+*.swp
+*.class
+*.jar
+*.war
+*.zip
+*.tar.gz
+*.iml
+*.idea/

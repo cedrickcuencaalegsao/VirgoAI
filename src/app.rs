@@ -8,6 +8,7 @@ use iced::{Element, Length, Subscription, Task, Theme};
 use crate::agent::pipeline::{self, Pending};
 use crate::agent::{ChatMessage, Role};
 use crate::chats::{self, Chat, ChatSummary};
+use crate::code::CodeDoc;
 use crate::config::Config;
 use crate::memory::retrieval;
 use crate::memory::store::{self, MemoryStore};
@@ -60,6 +61,22 @@ pub enum Message {
     ToggleAttach(String),
     ClearAttached,
     PickMention(String),
+
+    // Code panel
+    OpenFile(String),
+    CloseCode,
+    ReloadCode,
+    CodeScrolled(scrollable::Viewport),
+    SuggestLine(usize),
+    SuggestInputChanged(String),
+    SubmitSuggestion,
+    CancelSuggest,
+    /// (file, line, model reply or error)
+    SuggestionReady(String, usize, Result<String, String>),
+    RevertLine(usize),
+    DiscardEdits,
+    ApplyEdits,
+    UndoApply,
     PlannerSelected(String),
     ExecutorSelected(String),
     RefreshModels,
@@ -129,6 +146,16 @@ pub struct App {
     pub show_panel: bool,
     /// Short note about included files, shown in the status line.
     context_note: String,
+
+    // Code panel
+    pub code: Option<CodeDoc>,
+    pub code_scroll_y: f32,
+    pub code_view_h: f32,
+    /// Line whose suggestion bar is open.
+    pub suggest_line: Option<usize>,
+    pub suggest_input: String,
+    /// Line with a model request in flight.
+    pub suggesting: Option<usize>,
 }
 
 impl App {
@@ -174,6 +201,12 @@ impl App {
             project_path_input: String::new(),
             show_panel: true,
             context_note: String::new(),
+            code: None,
+            code_scroll_y: 0.0,
+            code_view_h: 900.0,
+            suggest_line: None,
+            suggest_input: String::new(),
+            suggesting: None,
         };
 
         let task = Task::perform(client::list_models(url), Message::ModelsLoaded);
@@ -294,6 +327,80 @@ impl App {
             }
             Message::PickMention(rel) => {
                 self.pick_mention(rel);
+                Task::none()
+            }
+
+            // ---- code panel ----
+            Message::OpenFile(rel) => self.open_file(rel),
+            Message::CloseCode => {
+                self.close_code();
+                Task::none()
+            }
+            Message::ReloadCode => {
+                if let Some(doc) = self.code.as_mut() {
+                    self.status = match doc.reload() {
+                        Ok(()) => format!("Reloaded {}", doc.rel),
+                        Err(e) => e,
+                    };
+                }
+                Task::none()
+            }
+            Message::CodeScrolled(viewport) => {
+                self.code_scroll_y = viewport.absolute_offset().y;
+                self.code_view_h = viewport.bounds().height;
+                Task::none()
+            }
+            Message::SuggestLine(line) => {
+                if self.suggest_line != Some(line) {
+                    self.suggest_input.clear();
+                }
+                self.suggest_line = Some(line);
+                Task::none()
+            }
+            Message::SuggestInputChanged(value) => {
+                self.suggest_input = value;
+                Task::none()
+            }
+            Message::CancelSuggest => {
+                self.suggest_line = None;
+                self.suggest_input.clear();
+                Task::none()
+            }
+            Message::SubmitSuggestion => self.submit_suggestion(),
+            Message::SuggestionReady(rel, line, result) => {
+                self.on_suggestion(rel, line, result);
+                Task::none()
+            }
+            Message::RevertLine(line) => {
+                if let Some(doc) = self.code.as_mut() {
+                    doc.clear_edit(line);
+                }
+                Task::none()
+            }
+            Message::DiscardEdits => {
+                if let Some(doc) = self.code.as_mut() {
+                    doc.clear_all();
+                    self.status = "Discarded all AI changes".into();
+                }
+                Task::none()
+            }
+            Message::ApplyEdits => {
+                if let Some(doc) = self.code.as_mut() {
+                    self.status = match doc.apply() {
+                        Ok(0) => "Nothing to apply".into(),
+                        Ok(count) => format!("Applied {count} change(s) to {}", doc.rel),
+                        Err(e) => e,
+                    };
+                }
+                Task::none()
+            }
+            Message::UndoApply => {
+                if let Some(doc) = self.code.as_mut() {
+                    self.status = match doc.undo_apply() {
+                        Ok(()) => format!("Restored {} to before the last apply", doc.rel),
+                        Err(e) => e,
+                    };
+                }
                 Task::none()
             }
             Message::ToggleThinking(index) => {
@@ -612,6 +719,104 @@ impl App {
         scroll_to_end()
     }
 
+    // ---- code panel -------------------------------------------------------
+
+    fn open_file(&mut self, rel: String) -> Task<Message> {
+        let Some(project) = &self.project else {
+            return Task::none();
+        };
+        match CodeDoc::open(&project.root, &rel) {
+            Ok(doc) => {
+                self.status = format!("Opened {rel}");
+                self.code = Some(doc);
+                self.code_scroll_y = 0.0;
+                self.suggest_line = None;
+                self.suggest_input.clear();
+                self.suggesting = None;
+                scrollable::snap_to(
+                    ui::code_panel::scroll_id(),
+                    scrollable::RelativeOffset::START,
+                )
+            }
+            Err(e) => {
+                self.status = e;
+                Task::none()
+            }
+        }
+    }
+
+    fn close_code(&mut self) {
+        self.code = None;
+        self.suggest_line = None;
+        self.suggest_input.clear();
+        self.suggesting = None;
+    }
+
+    /// Ask the executor model to rewrite the selected line.
+    fn submit_suggestion(&mut self) -> Task<Message> {
+        if self.suggesting.is_some() {
+            return Task::none();
+        }
+        let Some(line) = self.suggest_line else {
+            return Task::none();
+        };
+        let Some(doc) = &self.code else {
+            return Task::none();
+        };
+        if line >= doc.lines.len() {
+            return Task::none();
+        }
+
+        let request = pipeline::line_edit_request(&self.cfg, doc, line, &self.suggest_input);
+        let rel = doc.rel.clone();
+
+        self.suggesting = Some(line);
+        self.status = format!(
+            "Asking {} about line {}...",
+            self.cfg.executor_model,
+            line + 1
+        );
+        Task::perform(
+            client::chat_once(self.cfg.ollama_url.clone(), request),
+            move |result| Message::SuggestionReady(rel.clone(), line, result),
+        )
+    }
+
+    fn on_suggestion(&mut self, rel: String, line: usize, result: Result<String, String>) {
+        self.suggesting = None;
+
+        // The user may have opened another file while the model was working.
+        let Some(doc) = self.code.as_mut() else {
+            return;
+        };
+        if doc.rel != rel {
+            return;
+        }
+
+        match result {
+            Ok(reply) => {
+                let original = doc.lines.get(line).cloned().unwrap_or_default();
+                match pipeline::parse_line_edit(&reply, &original) {
+                    Ok(replacement) => {
+                        if replacement.len() == 1 && replacement[0] == original {
+                            self.status = format!("No change suggested for line {}", line + 1);
+                        } else {
+                            doc.set_edit(line, replacement);
+                            self.suggest_line = None;
+                            self.suggest_input.clear();
+                            self.status = format!(
+                                "Suggestion ready for line {} (shown in green). Apply it or revert it.",
+                                line + 1
+                            );
+                        }
+                    }
+                    Err(e) => self.status = e,
+                }
+            }
+            Err(e) => self.status = format!("Suggestion failed: {e}"),
+        }
+    }
+
     // ---- project folder ---------------------------------------------------
 
     fn open_project(&mut self, path: PathBuf) {
@@ -623,6 +828,7 @@ impl App {
                     project.entries.len(),
                     if project.truncated { ", truncated" } else { "" }
                 );
+                self.close_code();
                 self.project = Some(project);
                 self.expanded.clear();
                 self.attached.clear();
@@ -652,6 +858,7 @@ impl App {
     }
 
     fn close_project(&mut self) {
+        self.close_code();
         self.project = None;
         self.expanded.clear();
         self.attached.clear();
@@ -951,15 +1158,28 @@ impl App {
     pub fn view(&self) -> Element<'_, Message> {
         let page: Element<'_, Message> = match self.screen {
             Screen::Chat => {
-                let chat = ui::chat::view(self);
-                if self.show_panel {
-                    row![chat, ui::project_panel::view(self)]
-                        .spacing(14)
-                        .height(Length::Fill)
-                        .into()
+                let chat_width = if self.code.is_some() {
+                    Length::FillPortion(2)
                 } else {
-                    chat
+                    Length::Fill
+                };
+                let mut panels = row![container(ui::chat::view(self))
+                    .width(chat_width)
+                    .height(Length::Fill)]
+                .spacing(14)
+                .height(Length::Fill);
+
+                if self.code.is_some() {
+                    panels = panels.push(
+                        container(ui::code_panel::view(self))
+                            .width(Length::FillPortion(3))
+                            .height(Length::Fill),
+                    );
                 }
+                if self.show_panel {
+                    panels = panels.push(ui::project_panel::view(self));
+                }
+                panels.into()
             }
             Screen::Memory => ui::memory::view(self),
             Screen::Settings => ui::settings::view(self),

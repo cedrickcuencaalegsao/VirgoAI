@@ -38,8 +38,8 @@ fn empty_view(app: &App) -> Element<'_, Message> {
     column![
         text("Project").size(18).font(style::bold()),
         text(
-            "Open a folder to chat about your code. Click files to attach them, \
-             or type @ in the message to mention a file or folder."
+            "Open a folder to chat about your code. Click a file to open it in the code \
+             panel, use the paperclip to attach it, or type @ in the message to mention it."
         )
         .size(13)
         .style(style::dim),
@@ -87,7 +87,7 @@ fn open_view<'a>(app: &'a App, project: &'a Project) -> Element<'a, Message> {
     .spacing(2)
     .align_y(Vertical::Center);
 
-    let hint = text("Click a file to attach it. Type @ in the chat to mention files or folders.")
+    let hint = text("Click a file to open it in the code panel. Use the paperclip to attach it to the chat, or type @ to mention files.")
         .size(11)
         .style(style::dim);
 
@@ -140,28 +140,37 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
             .into()
     } else {
         let attached = app.attached.contains(&entry.rel);
-        let icon_color = if attached { icons::accent() } else { icons::muted() };
+        let open_here = app.code.as_ref().is_some_and(|doc| doc.rel == entry.rel);
+        let icon_color = if open_here { icons::accent() } else { icons::muted() };
 
-        let mut content = row![
+        let content = row![
             indent,
             Space::with_width(Length::Fixed(14.0)),
             icons::tint(icons::file_text(), 15.0, icon_color),
             text(entry.name.as_str()).size(13),
-            horizontal_space(),
         ]
         .spacing(6)
         .align_y(Vertical::Center);
 
-        if attached {
-            content = content.push(icons::tint(icons::check(), 14.0, icons::accent()));
-        }
+        // Paperclip attaches the file to the chat; it turns into a check once attached.
+        let attach_icon = if attached { icons::check() } else { icons::paperclip() };
+        let attach_color = if attached { icons::accent() } else { icons::muted() };
 
-        button(content)
-            .width(Length::Fill)
-            .padding([5, 8])
-            .on_press(Message::ToggleAttach(entry.rel.clone()))
-            .style(style::nav_item(attached))
-            .into()
+        row![
+            // Clicking the file opens it in the code panel.
+            button(content)
+                .width(Length::Fill)
+                .padding([5, 8])
+                .on_press(Message::OpenFile(entry.rel.clone()))
+                .style(style::nav_item(open_here)),
+            button(icons::tint(attach_icon, 15.0, attach_color))
+                .padding([6, 7])
+                .on_press(Message::ToggleAttach(entry.rel.clone()))
+                .style(style::ghost_button),
+        ]
+        .spacing(2)
+        .align_y(Vertical::Center)
+        .into()
     }
 }
 

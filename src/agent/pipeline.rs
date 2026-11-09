@@ -1,4 +1,5 @@
 use super::{ChatMessage, Role};
+use crate::code::CodeDoc;
 use crate::config::Config;
 use crate::ollama::types::{ChatMsg, ChatRequest, Options};
 
@@ -15,6 +16,13 @@ const EXECUTOR_SYSTEM: &str = "You are the execution stage of a local assistant.
 Answer the user's request directly and accurately. If a plan is provided, follow it. \
 Use the memory notes when they are relevant, and do not mention them unless asked. \
 If project files are provided, base your answer on them, mention file paths, and never invent files that are not listed.";
+
+const LINE_EDIT_SYSTEM: &str = "You are a precise code editor. You are given an excerpt of a file \
+and ONE target line (marked with >>>). Rewrite only that line following the instruction. If no \
+instruction is given, improve the line (fix bugs, clarity, idioms) without changing what it does. \
+Reply with ONLY the replacement code inside a single fenced code block, with no explanation. \
+Keep the same indentation style. Use exactly one line unless the change truly needs more. \
+If the line should be deleted, reply with an empty code block.";
 
 /// Everything captured when the user hits Send, kept until the executor starts.
 pub struct Pending {
@@ -84,6 +92,90 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         options: Options { num_ctx: cfg.num_ctx },
         keep_alive: cfg.keep_alive.clone(),
     }
+}
+
+/// Ask the executor model to rewrite one line of the open file.
+pub fn line_edit_request(
+    cfg: &Config,
+    doc: &CodeDoc,
+    line: usize,
+    instruction: &str,
+) -> ChatRequest {
+    let target = doc.lines.get(line).map(String::as_str).unwrap_or("");
+    let instruction = instruction.trim();
+
+    let mut user = format!(
+        "File: {} ({})\n\nExcerpt:\n{}\nTarget line {}:\n```\n{}\n```\n\n",
+        doc.rel,
+        doc.lang(),
+        doc.context_around(line, 12),
+        line + 1,
+        target
+    );
+    if instruction.is_empty() {
+        user.push_str("Instruction: improve this line.");
+    } else {
+        user.push_str(&format!("Instruction: {instruction}"));
+    }
+
+    ChatRequest {
+        model: cfg.executor_model.clone(),
+        messages: vec![ChatMsg::system(LINE_EDIT_SYSTEM), ChatMsg::user(user)],
+        stream: false,
+        think: cfg.executor_think.then_some(true),
+        options: Options { num_ctx: cfg.num_ctx },
+        keep_alive: cfg.keep_alive.clone(),
+    }
+}
+
+/// Pull the replacement lines out of the model's reply (a fenced code block).
+/// An empty block means "delete the line".
+pub fn parse_line_edit(reply: &str, original: &str) -> Result<Vec<String>, String> {
+    let text = strip_think_tags(reply);
+
+    let lines: Vec<&str> = if let Some(start) = text.find("```") {
+        let after = &text[start + 3..];
+        // Skip the rest of the opening fence line (the language tag).
+        let body = after.split_once('\n').map(|(_, rest)| rest).unwrap_or("");
+        let body = match body.find("```") {
+            Some(end) => &body[..end],
+            None => body,
+        };
+        body.lines().collect()
+    } else {
+        let trimmed = text.trim();
+        if trimmed.lines().count() > 3 {
+            return Err("The model did not return a code block".into());
+        }
+        trimmed.lines().collect()
+    };
+
+    let mut replacement: Vec<String> = lines.iter().map(|l| l.trim_end().to_string()).collect();
+    while replacement.last().is_some_and(|l| l.is_empty()) {
+        replacement.pop();
+    }
+    while replacement.first().is_some_and(|l| l.is_empty()) {
+        replacement.remove(0);
+    }
+    Ok(fix_indent(original, replacement))
+}
+
+/// Models often drop the leading indentation of a single line: restore it.
+fn fix_indent(original: &str, replacement: Vec<String>) -> Vec<String> {
+    let indent: String = original.chars().take_while(|c| c.is_whitespace()).collect();
+    if indent.is_empty() {
+        return replacement;
+    }
+    let first_indented = replacement
+        .first()
+        .map_or(true, |l| l.is_empty() || l.starts_with(char::is_whitespace));
+    if first_indented {
+        return replacement;
+    }
+    replacement
+        .into_iter()
+        .map(|l| if l.is_empty() { l } else { format!("{indent}{l}") })
+        .collect()
 }
 
 fn append_memory(system: &mut String, memory: &str) {

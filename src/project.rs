@@ -303,7 +303,7 @@ fn is_binary(path: &Path) -> bool {
 }
 
 /// Language tag for the code fence.
-fn lang_for(rel: &str) -> &str {
+pub fn lang_for(rel: &str) -> &str {
     let Some((_, ext)) = rel.rsplit_once('.') else {
         return "";
     };

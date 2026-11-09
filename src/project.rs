@@ -14,16 +14,26 @@ const MAX_ENTRIES: usize = 3000;
 const MAX_FILE_BYTES: u64 = 200_000;
 
 const IGNORED_DIRS: &[&str] = &[
-    "node_modules", "target", "dist", "build", "out", "venv", "env", "__pycache__", "vendor",
-    "Pods", "DerivedData", "coverage",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "out",
+    "venv",
+    "env",
+    "__pycache__",
+    "vendor",
+    "Pods",
+    "DerivedData",
+    "coverage",
 ];
 
 /// Files with these extensions are hidden from the tree (not useful as text).
 const BINARY_EXT: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "icns", "tiff", "heic", "mp3", "wav",
-    "flac", "mp4", "mov", "avi", "mkv", "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar",
-    "dmg", "pkg", "exe", "dll", "so", "dylib", "a", "o", "class", "jar", "pdf", "ttf", "otf",
-    "woff", "woff2", "sqlite", "db", "lock",
+    "flac", "mp4", "mov", "avi", "mkv", "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "dmg",
+    "pkg", "exe", "dll", "so", "dylib", "a", "o", "class", "jar", "pdf", "ttf", "otf", "woff",
+    "woff2", "sqlite", "db", "lock",
 ];
 
 #[derive(Debug, Clone)]
@@ -55,6 +65,74 @@ pub struct FileContext {
 }
 
 impl Project {
+    pub fn is_file(&self, rel: &str) -> bool {
+        self.entries.iter().any(|e| !e.is_dir && e.rel == rel)
+    }
+
+    /// Every file with its main definitions, shrunk to fit `max_chars`.
+    /// Files that don't fit with their definitions are listed as bare paths.
+    pub fn repo_map(&self, max_chars: usize) -> String {
+        let mut out = String::new();
+        let mut hidden = 0usize;
+
+        for entry in self.entries.iter().filter(|e| !e.is_dir) {
+            let mut block = format!("{}\n", entry.rel);
+            if is_code(&entry.rel) {
+                if let Ok(text) = self.read(&entry.rel) {
+                    for line in text.lines().filter(|l| is_signature(l)).take(16) {
+                        let sig: String = line.trim().chars().take(90).collect();
+                        block.push_str("  ");
+                        block.push_str(&sig);
+                        block.push('\n');
+                    }
+                }
+            }
+            if out.len() + block.len() <= max_chars {
+                out.push_str(&block);
+            } else {
+                let bare = format!("{}\n", entry.rel);
+                if out.len() + bare.len() <= max_chars {
+                    out.push_str(&bare);
+                } else {
+                    hidden += 1;
+                }
+            }
+        }
+        if hidden > 0 {
+            out.push_str(&format!("... and {hidden} more files not listed\n"));
+        }
+        out
+    }
+
+    /// README, manifests and entry points, used when the scout picks nothing.
+    pub fn key_files(&self) -> Vec<String> {
+        const NAMES: &[&str] = &[
+            "README.md",
+            "readme.md",
+            "Cargo.toml",
+            "package.json",
+            "pyproject.toml",
+            "go.mod",
+            "composer.json",
+            "main.rs",
+            "lib.rs",
+            "main.py",
+            "index.js",
+            "index.ts",
+        ];
+        let mut hits: Vec<(usize, &Entry)> = self
+            .entries
+            .iter()
+            .filter(|e| !e.is_dir && e.depth <= 1)
+            .filter_map(|e| NAMES.iter().position(|n| *n == e.name).map(|p| (p, e)))
+            .collect();
+        hits.sort_by_key(|(p, e)| (*p, e.depth));
+        hits.into_iter()
+            .take(5)
+            .map(|(_, e)| e.rel.clone())
+            .collect()
+    }
+
     pub fn scan(root: PathBuf) -> io::Result<Self> {
         if !root.is_dir() {
             return Err(io::Error::new(io::ErrorKind::NotFound, "not a folder"));
@@ -101,7 +179,13 @@ impl Project {
         }
 
         let index = entries.iter().map(|e| e.rel.clone()).collect();
-        Ok(Self { root, name, entries, truncated, index })
+        Ok(Self {
+            root,
+            name,
+            entries,
+            truncated,
+            index,
+        })
     }
 
     pub fn contains(&self, rel: &str) -> bool {
@@ -283,7 +367,11 @@ impl Project {
             included.push(rel.clone());
         }
 
-        FileContext { text, included, skipped }
+        FileContext {
+            text,
+            included,
+            skipped,
+        }
     }
 }
 
@@ -319,4 +407,44 @@ pub fn lang_for(rel: &str) -> &str {
         "rb" => "ruby",
         other => other,
     }
+}
+fn is_code(rel: &str) -> bool {
+    const EXT: &[&str] = &[
+        "rs", "py", "js", "jsx", "ts", "tsx", "php", "go", "java", "kt", "rb", "c", "cpp", "h",
+        "cs", "swift", "vue", "svelte",
+    ];
+    rel.rsplit_once('.')
+        .is_some_and(|(_, ext)| EXT.contains(&ext))
+}
+
+fn is_signature(line: &str) -> bool {
+    const STARTS: &[&str] = &[
+        "pub fn ",
+        "pub async fn ",
+        "fn ",
+        "async fn ",
+        "pub struct ",
+        "struct ",
+        "pub enum ",
+        "enum ",
+        "pub trait ",
+        "trait ",
+        "impl ",
+        "pub mod ",
+        "mod ",
+        "pub type ",
+        "def ",
+        "async def ",
+        "class ",
+        "function ",
+        "async function ",
+        "export ",
+        "func ",
+        "interface ",
+        "public ",
+        "protected ",
+        "private ",
+    ];
+    let t = line.trim_start();
+    !t.starts_with("//") && STARTS.iter().any(|s| t.starts_with(s))
 }

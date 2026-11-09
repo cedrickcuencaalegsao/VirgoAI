@@ -27,6 +27,7 @@ pub enum Screen {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Idle,
+    Scouting,
     Planning,
     Executing,
 }
@@ -36,8 +37,6 @@ pub enum Message {
     Navigate(Screen),
     /// Animation clock, only runs while a model is working.
     Tick,
-
-    ToggleEditMode(bool),
 
     // Chat
     NewChat,
@@ -50,6 +49,9 @@ pub enum Message {
     ToggleThinking(usize),
     /// Put text (a whole reply or one code block) on the clipboard.
     Copy(String),
+    /// Planner's file picks (or an error) after the scouting call.
+    ScoutDone(Result<String, String>),
+    ToggleEditMode(bool),
 
     PlanAction(text_editor::Action),
     RunPlan,
@@ -175,6 +177,11 @@ pub struct App {
     pub suggest_input: String,
     /// Line with a model request in flight.
     pub suggesting: Option<usize>,
+
+    /// Files that are always read: open in the code panel, attached, @mentioned.
+    scout_must: Vec<String>,
+    /// Files the planner actually read for this request.
+    scout_files: Vec<String>,
 }
 
 impl App {
@@ -231,6 +238,8 @@ impl App {
             suggest_line: None,
             suggest_input: String::new(),
             suggesting: None,
+            scout_must: Vec::new(),
+            scout_files: Vec::new(),
         };
 
         let task = Task::perform(client::list_models(url), Message::ModelsLoaded);
@@ -284,6 +293,8 @@ impl App {
                 self.edit_mode = value;
                 Task::none()
             }
+
+            Message::ScoutDone(result) => self.on_scout(result),
 
             // ---- chat ----
             Message::NewChat => {
@@ -638,7 +649,11 @@ impl App {
         let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
         let memory = retrieval::build_context(&notes, &text, budget_chars);
 
-        let (project, files) = self.project_context(&text);
+        let (project, files) = if self.intent == Intent::Change {
+            self.map_context(&text)
+        } else {
+            self.project_context(&text)
+        };
 
         self.messages
             .push(ChatMessage::new(Role::User, text.clone()).with_files(files));
@@ -650,6 +665,10 @@ impl App {
             project,
             intent: self.intent,
         };
+
+        if self.intent == Intent::Change {
+            return self.start_scout(pending);
+        }
 
         // Code changes always get a plan, so there is something to review.
         if self.cfg.use_planner || self.intent == Intent::Change {
@@ -794,6 +813,7 @@ impl App {
                 self.save_chat();
                 Task::none()
             }
+            Phase::Scouting => Task::none(),
             Phase::Idle => Task::none(),
         }
     }
@@ -847,33 +867,10 @@ impl App {
                 m.content = plan.clone();
             }
         }
-        self.add_plan_files(&plan);
+        self.prepare_executor_context(&plan);
 
         let plan = if plan.is_empty() { None } else { Some(plan) };
         self.start_executor(plan)
-    }
-
-    /// The executor can only match text it can see, so add the contents of
-    /// every project file the plan mentions.
-    fn add_plan_files(&mut self, plan: &str) {
-        let budget = self.cfg.num_ctx as usize * 7 / 5;
-        let (Some(project), Some(pending)) = (self.project.as_ref(), self.pending.as_mut()) else {
-            return;
-        };
-        let files: Vec<String> = project
-            .entries
-            .iter()
-            .filter(|e| !e.is_dir && plan.contains(&e.rel))
-            .map(|e| e.rel.clone())
-            .collect();
-        if files.is_empty() {
-            return;
-        }
-        let ctx = project.build_context(&files, budget);
-        pending
-            .project
-            .push_str("\n## Files named in the plan (edit these)\n\n");
-        pending.project.push_str(&ctx.text);
     }
 
     /// Open `file` in the code panel and stage its proposed edits as red/green rows.
@@ -1383,6 +1380,154 @@ impl App {
         row![ui::nav::view(self), content]
             .height(Length::Fill)
             .into()
+    }
+    /// Edit mode: send the whole-project map instead of a bare file tree.
+    fn map_context(&mut self, message: &str) -> (String, Vec<String>) {
+        self.context_note.clear();
+        self.scout_files.clear();
+        let Some(project) = &self.project else {
+            self.scout_must.clear();
+            return (String::new(), Vec::new());
+        };
+
+        let mut must: Vec<String> = Vec::new();
+        if let Some(doc) = &self.code {
+            must.push(doc.rel.clone());
+        }
+        for rel in &self.attached {
+            if !must.contains(rel) {
+                must.push(rel.clone());
+            }
+        }
+        for rel in project.resolve_mentions(message) {
+            if !must.contains(&rel) {
+                must.push(rel);
+            }
+        }
+
+        let map = project.repo_map(self.cfg.num_ctx as usize);
+        let text = format!(
+            "Folder: {}\n\nProject map (every file with its main definitions):\n{}",
+            project.name, map
+        );
+        self.scout_must = must.clone();
+        (text, must)
+    }
+
+    /// Pass 1: the planner model picks the files it wants to read.
+    fn start_scout(&mut self, pending: Pending) -> Task<Message> {
+        let request = pipeline::scout_request(&self.cfg, &pending);
+        self.pending = Some(pending);
+        self.messages
+            .push(ChatMessage::new(Role::Plan, String::new()));
+        self.begin_stage(Phase::Scouting);
+        self.status = format!("Scanning the project with {}...", self.cfg.planner_model);
+
+        let (task, handle) = Task::perform(
+            client::chat_once(self.cfg.ollama_url.clone(), request),
+            Message::ScoutDone,
+        )
+        .abortable();
+        self.abort = Some(handle);
+        task
+    }
+
+    /// Pass 2: read the picked files, then let the planner write the plan.
+    fn on_scout(&mut self, result: Result<String, String>) -> Task<Message> {
+        if self.phase != Phase::Scouting {
+            return Task::none();
+        }
+        self.abort = None;
+        if self.project.is_none() || self.pending.is_none() {
+            return self.fail("No project is open".into());
+        }
+
+        let scout_failed = result.is_err();
+        let budget = self.cfg.num_ctx as usize * 7 / 5;
+        let mut note = String::new();
+
+        if let (Some(project), Some(pending)) = (self.project.as_ref(), self.pending.as_mut()) {
+            let picked: Vec<String> = match &result {
+                Ok(reply) => pipeline::parse_scout(reply)
+                    .into_iter()
+                    .filter(|rel| project.is_file(rel))
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+
+            let mut files = self.scout_must.clone();
+            let before = files.len();
+            for rel in picked {
+                if !files.contains(&rel) {
+                    files.push(rel);
+                }
+            }
+            if files.len() == before {
+                for rel in project.key_files() {
+                    if !files.contains(&rel) {
+                        files.push(rel);
+                    }
+                }
+            }
+            files.truncate(10);
+
+            let ctx = project.build_context(&files, budget);
+            let map = std::mem::take(&mut pending.project);
+            pending.project = format!(
+                "{map}\n## File contents (selected by the scout)\n\n{}",
+                ctx.text
+            );
+            note = format!("{} file(s) read", ctx.included.len());
+            self.scout_files = ctx.included;
+        }
+
+        let request = match &self.pending {
+            Some(p) => pipeline::planner_request(&self.cfg, p),
+            None => return Task::none(),
+        };
+        self.begin_stage(Phase::Planning);
+        self.status = format!(
+            "Planning with {} ({note}{})...",
+            self.cfg.planner_model,
+            if scout_failed {
+                ", scout failed: used key files"
+            } else {
+                ""
+            }
+        );
+        self.spawn_stream(request)
+    }
+
+    /// The coder only needs the files the plan touches, not the whole map.
+    fn prepare_executor_context(&mut self, plan: &str) {
+        let budget = self.cfg.num_ctx as usize * 7 / 4;
+        let (Some(project), Some(pending)) = (self.project.as_ref(), self.pending.as_mut()) else {
+            return;
+        };
+
+        let mut files: Vec<String> = self.scout_must.clone();
+        for e in project
+            .entries
+            .iter()
+            .filter(|e| !e.is_dir && plan.contains(&e.rel))
+        {
+            if !files.contains(&e.rel) {
+                files.push(e.rel.clone());
+            }
+        }
+        for rel in &self.scout_files {
+            if !files.contains(rel) {
+                files.push(rel.clone());
+            }
+        }
+
+        let ctx = project.build_context(&files, budget);
+        pending.project = format!(
+            "Folder: {}\n\nFile tree:\n{}\n## Files (edit these)\n\n{}",
+            project.name,
+            project.tree_overview((budget / 4).min(3000)),
+            ctx.text
+        );
     }
 }
 

@@ -32,8 +32,20 @@ pub enum Intent {
     Change,
 }
 
-const PLANNER_CHANGE_SUFFIX: &str = "\n\nThe user wants the code changed. List every file to edit \
-as a line like `- path/to/file: what changes`, using exact relative paths from the file tree.";
+const PLANNER_CHANGE_SUFFIX: &str = "\n\nThe user wants the code changed. You are given a project \
+map (every file with its main definitions) and the full contents of the files most relevant to the \
+request. Plan against the real code: reuse existing functions and types by name, follow the \
+project's conventions, and never invent files or functions that are not shown. Write numbered \
+steps in dependency order. Start each step with `- path/to/file:` using exact relative paths from \
+the map, name the function or struct to change, and say what changes. Mark a file that does not \
+exist yet with (new). If you need a file that was not shown, list it under 'Need to check' \
+instead of guessing.";
+
+const SCOUT_SYSTEM: &str = "You are the scouting stage of a coding assistant. You get a map of a \
+project (files with their main definitions) and a request. Reply with ONLY the relative paths of \
+the files that must be READ to plan the request: files to change, files that define types or \
+functions the change touches, and one similar existing feature to copy conventions from. At most \
+8 paths, one per line, exactly as written in the map. No commentary.";
 
 const EDIT_SYSTEM: &str = "You are a code editor. Follow the plan and the user's request. \
 For every change output exactly this format:\n\
@@ -360,4 +372,37 @@ pub fn strip_think_tags(text: &str) -> String {
     }
     out.push_str(rest);
     out.trim().to_string()
+}
+
+/// Non-streaming call: the planner picks which files to read.
+pub fn scout_request(cfg: &Config, pending: &Pending) -> ChatRequest {
+    let user = format!(
+        "# Project map\n{}\n\n# Request\n{}\n\nWhich files must be read to plan this?",
+        pending.project, pending.task
+    );
+    ChatRequest {
+        model: cfg.planner_model.clone(),
+        messages: vec![ChatMsg::system(SCOUT_SYSTEM), ChatMsg::user(user)],
+        stream: false,
+        think: Some(false), // a path list needs no long reasoning
+        options: Options { num_ctx: cfg.num_ctx },
+        keep_alive: cfg.keep_alive.clone(),
+    }
+}
+
+/// Paths from the scout reply. The caller checks that they exist.
+pub fn parse_scout(reply: &str) -> Vec<String> {
+    strip_think_tags(reply)
+        .lines()
+        .map(|l| {
+            let mut s = l.trim().trim_start_matches(|c| c == '-' || c == '*' || c == ' ');
+            if let Some((n, rest)) = s.split_once(". ") {
+                if n.chars().all(|c| c.is_ascii_digit()) {
+                    s = rest;
+                }
+            }
+            s.trim().trim_matches('`').to_string()
+        })
+        .filter(|s| !s.is_empty())
+        .collect()
 }

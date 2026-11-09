@@ -158,18 +158,48 @@ pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
 }
 
 pub fn primary_button(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = button::primary(theme, status);
-    style.border.radius = 12.0.into();
-    style
+    let p = theme.extended_palette();
+    let (background, text_color) = match status {
+        button::Status::Active => (p.primary.base.color, p.primary.base.text),
+        button::Status::Hovered | button::Status::Pressed => {
+            (p.primary.strong.color, p.primary.strong.text)
+        }
+        button::Status::Disabled => (
+            alpha(p.primary.base.color, 0.35),
+            alpha(p.primary.base.text, 0.6),
+        ),
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 12.0.into() },
+        shadow: Shadow::default(),
+    }
 }
 
 pub fn danger_button(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = button::danger(theme, status);
-    style.border.radius = 12.0.into();
-    style
+    let p = theme.extended_palette();
+    let (background, text_color) = match status {
+        button::Status::Active => (p.danger.base.color, p.danger.base.text),
+        button::Status::Hovered | button::Status::Pressed => {
+            (p.danger.strong.color, p.danger.strong.text)
+        }
+        button::Status::Disabled => (
+            alpha(p.danger.base.color, 0.35),
+            alpha(p.danger.base.text, 0.6),
+        ),
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color,
+        border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 12.0.into() },
+        shadow: Shadow::default(),
+    }
 }
 
-/// Quiet text button for secondary actions.
+/// Quiet button for secondary actions.
 pub fn ghost_button(theme: &Theme, status: button::Status) -> button::Style {
     let p = theme.extended_palette();
     let text_color = theme.palette().text;
@@ -186,6 +216,23 @@ pub fn ghost_button(theme: &Theme, status: button::Status) -> button::Style {
         background: background.map(Background::Color),
         text_color: color,
         border: Border { color: Color::TRANSPARENT, width: 0.0, radius: 8.0.into() },
+        shadow: Shadow::default(),
+    }
+}
+
+/// Small pill for attached files above the composer.
+pub fn chip(theme: &Theme, status: button::Status) -> button::Style {
+    let p = theme.extended_palette();
+    let primary = p.primary.base.color;
+    let background = match status {
+        button::Status::Hovered | button::Status::Pressed => alpha(primary, 0.28),
+        _ => alpha(primary, 0.15),
+    };
+
+    button::Style {
+        background: Some(Background::Color(background)),
+        text_color: theme.palette().text,
+        border: Border { color: alpha(primary, 0.4), width: 1.0, radius: 12.0.into() },
         shadow: Shadow::default(),
     }
 }

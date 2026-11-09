@@ -1,8 +1,9 @@
-use iced::widget::{button, column, container, row, scrollable, text};
+use iced::widget::{button, column, container, row, scrollable, text, Svg};
 use iced::{Element, Length};
 
-use super::style;
+use super::{short, style};
 use crate::app::{App, Message, Screen};
+use crate::icons;
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let brand = column![
@@ -14,16 +15,16 @@ pub fn view(app: &App) -> Element<'_, Message> {
     ]
     .spacing(2);
 
-    let new_chat = button(text("+  New chat").size(14))
+    let new_chat = button(icons::label(icons::plus(), "New chat", 14, icons::on_primary()))
         .width(Length::Fill)
         .padding([10, 14])
         .on_press_maybe((!app.is_busy()).then_some(Message::NewChat))
         .style(style::primary_button);
 
     let items = column![
-        item("Chat", Screen::Chat, app.screen),
-        item("Memory", Screen::Memory, app.screen),
-        item("Settings", Screen::Settings, app.screen),
+        item(icons::message_square(), "Chat", Screen::Chat, app.screen),
+        item(icons::database(), "Memory", Screen::Memory, app.screen),
+        item(icons::sliders_horizontal(), "Settings", Screen::Settings, app.screen),
     ]
     .spacing(4);
 
@@ -70,16 +71,19 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .into()
 }
 
-fn item(label: &str, target: Screen, current: Screen) -> Element<'_, Message> {
-    button(text(label).size(14))
+fn item<'a>(icon: Svg<'a>, label: &'a str, target: Screen, current: Screen) -> Element<'a, Message> {
+    let active = target == current;
+    let color = if active { icons::accent() } else { icons::muted() };
+
+    button(icons::label(icon, label, 14, color))
         .width(Length::Fill)
         .padding([10, 14])
         .on_press(Message::Navigate(target))
-        .style(style::nav_item(target == current))
+        .style(style::nav_item(active))
         .into()
 }
 
-/// One saved chat: click the title to open it, "x" to delete it.
+/// One saved chat: click the title to open it, the trash icon to delete it.
 fn chat_row<'a>(app: &'a App, id: &'a str, title: &str) -> Element<'a, Message> {
     let active = app.current_chat.as_deref() == Some(id);
     let enabled = !app.is_busy();
@@ -90,21 +94,11 @@ fn chat_row<'a>(app: &'a App, id: &'a str, title: &str) -> Element<'a, Message> 
             .padding([7, 10])
             .on_press_maybe(enabled.then(|| Message::OpenChat(id.to_string())))
             .style(style::nav_item(active)),
-        button(text("x").size(12))
-            .padding([6, 9])
+        button(icons::tint(icons::trash_2(), 14.0, icons::muted()))
+            .padding([7, 8])
             .on_press_maybe(enabled.then(|| Message::DeleteChat(id.to_string())))
             .style(style::ghost_button),
     ]
     .spacing(2)
     .into()
-}
-
-/// Shorten a title so it fits on one line in the sidebar.
-fn short(title: &str, max: usize) -> String {
-    if title.chars().count() <= max {
-        title.to_string()
-    } else {
-        let head: String = title.chars().take(max).collect();
-        format!("{head}...")
-    }
 }

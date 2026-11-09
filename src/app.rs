@@ -1,3 +1,5 @@
+use std::collections::{BTreeSet, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::widget::{column, container, row, scrollable, text, text_editor};
@@ -11,6 +13,7 @@ use crate::memory::retrieval;
 use crate::memory::store::{self, MemoryStore};
 use crate::ollama::client;
 use crate::ollama::types::{ChatRequest, StreamEvent};
+use crate::project::Project;
 use crate::ui;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +47,19 @@ pub enum Message {
     ToggleThinking(usize),
     /// Put text (a whole reply or one code block) on the clipboard.
     Copy(String),
+
+    // Project panel
+    TogglePanel,
+    OpenFolder,
+    FolderPicked(Option<PathBuf>),
+    ProjectPathChanged(String),
+    OpenProjectPath,
+    RefreshProject,
+    CloseProject,
+    ToggleDir(String),
+    ToggleAttach(String),
+    ClearAttached,
+    PickMention(String),
     PlannerSelected(String),
     ExecutorSelected(String),
     RefreshModels,
@@ -102,6 +118,17 @@ pub struct App {
     pub selected_note: Option<String>,
     pub editor: text_editor::Content,
     pub new_note_name: String,
+
+    // Project panel
+    pub project: Option<Project>,
+    /// Folders opened in the tree (relative paths).
+    pub expanded: HashSet<String>,
+    /// Files attached to every message until removed (relative paths).
+    pub attached: BTreeSet<String>,
+    pub project_path_input: String,
+    pub show_panel: bool,
+    /// Short note about included files, shown in the status line.
+    context_note: String,
 }
 
 impl App {
@@ -114,6 +141,11 @@ impl App {
         let num_ctx_input = cfg.num_ctx.to_string();
         let url = cfg.ollama_url.clone();
         let chat_list = chats::list();
+        let project = if cfg.last_project.trim().is_empty() {
+            None
+        } else {
+            Project::scan(PathBuf::from(&cfg.last_project)).ok()
+        };
 
         let app = App {
             cfg,
@@ -136,6 +168,12 @@ impl App {
             selected_note: None,
             editor: text_editor::Content::new(),
             new_note_name: String::new(),
+            project,
+            expanded: HashSet::new(),
+            attached: BTreeSet::new(),
+            project_path_input: String::new(),
+            show_panel: true,
+            context_note: String::new(),
         };
 
         let task = Task::perform(client::list_models(url), Message::ModelsLoaded);
@@ -205,6 +243,58 @@ impl App {
             Message::Copy(content) => {
                 self.status = "Copied to clipboard".into();
                 iced::clipboard::write(content)
+            }
+
+            // ---- project panel ----
+            Message::TogglePanel => {
+                self.show_panel = !self.show_panel;
+                Task::none()
+            }
+            Message::OpenFolder => Task::perform(pick_folder(), Message::FolderPicked),
+            Message::FolderPicked(path) => {
+                if let Some(path) = path {
+                    self.open_project(path);
+                }
+                Task::none()
+            }
+            Message::ProjectPathChanged(value) => {
+                self.project_path_input = value;
+                Task::none()
+            }
+            Message::OpenProjectPath => {
+                let raw = self.project_path_input.trim().to_string();
+                if !raw.is_empty() {
+                    self.open_project(expand_home(&raw));
+                }
+                Task::none()
+            }
+            Message::RefreshProject => {
+                self.refresh_project();
+                Task::none()
+            }
+            Message::CloseProject => {
+                self.close_project();
+                Task::none()
+            }
+            Message::ToggleDir(rel) => {
+                if !self.expanded.remove(&rel) {
+                    self.expanded.insert(rel);
+                }
+                Task::none()
+            }
+            Message::ToggleAttach(rel) => {
+                if !self.attached.remove(&rel) {
+                    self.attached.insert(rel);
+                }
+                Task::none()
+            }
+            Message::ClearAttached => {
+                self.attached.clear();
+                Task::none()
+            }
+            Message::PickMention(rel) => {
+                self.pick_mention(rel);
+                Task::none()
             }
             Message::ToggleThinking(index) => {
                 if let Some(m) = self.messages.get_mut(index) {
@@ -381,16 +471,23 @@ impl App {
         let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
         let memory = retrieval::build_context(&notes, &text, budget_chars);
 
-        self.messages.push(ChatMessage::new(Role::User, text.clone()));
+        // Folder tree + attached and @mentioned files from the open project.
+        let (project, files) = self.project_context(&text);
+
+        self.messages
+            .push(ChatMessage::new(Role::User, text.clone()).with_files(files));
         self.save_chat();
-        let pending = Pending { task: text, memory, history };
+        let pending = Pending { task: text, memory, history, project };
 
         if self.cfg.use_planner {
             let request = pipeline::planner_request(&self.cfg, &pending);
             self.pending = Some(pending);
             self.messages.push(ChatMessage::new(Role::Plan, String::new()));
             self.begin_stage(Phase::Planning);
-            self.status = format!("Planning with {}...", self.cfg.planner_model);
+            self.status = format!(
+                "Planning with {}...{}",
+                self.cfg.planner_model, self.context_note
+            );
             self.spawn_stream(request)
         } else {
             self.pending = Some(pending);
@@ -406,7 +503,10 @@ impl App {
         let request = pipeline::executor_request(&self.cfg, &pending, plan.as_deref());
         self.messages.push(ChatMessage::new(Role::Assistant, String::new()));
         self.begin_stage(Phase::Executing);
-        self.status = format!("Answering with {}...", self.cfg.executor_model);
+        self.status = format!(
+            "Answering with {}...{}",
+            self.cfg.executor_model, self.context_note
+        );
         self.spawn_stream(request)
     }
 
@@ -510,6 +610,110 @@ impl App {
         self.status = error;
         self.save_chat();
         scroll_to_end()
+    }
+
+    // ---- project folder ---------------------------------------------------
+
+    fn open_project(&mut self, path: PathBuf) {
+        match Project::scan(path.clone()) {
+            Ok(project) => {
+                self.status = format!(
+                    "Opened {} ({} items{})",
+                    project.name,
+                    project.entries.len(),
+                    if project.truncated { ", truncated" } else { "" }
+                );
+                self.project = Some(project);
+                self.expanded.clear();
+                self.attached.clear();
+                self.project_path_input.clear();
+                self.show_panel = true;
+                self.cfg.last_project = path.to_string_lossy().to_string();
+                self.persist();
+            }
+            Err(e) => self.status = format!("Could not open folder: {e}"),
+        }
+    }
+
+    /// Rescan the folder, keeping open folders and attachments that still exist.
+    fn refresh_project(&mut self) {
+        let Some(root) = self.project.as_ref().map(|p| p.root.clone()) else {
+            return;
+        };
+        match Project::scan(root) {
+            Ok(project) => {
+                self.attached.retain(|rel| project.contains(rel));
+                self.expanded.retain(|rel| project.contains(rel));
+                self.status = format!("Refreshed {}", project.name);
+                self.project = Some(project);
+            }
+            Err(e) => self.status = format!("Could not refresh: {e}"),
+        }
+    }
+
+    fn close_project(&mut self) {
+        self.project = None;
+        self.expanded.clear();
+        self.attached.clear();
+        self.cfg.last_project.clear();
+        self.persist();
+        self.status = "Project closed".into();
+    }
+
+    /// Replace the `@token` being typed with the chosen path.
+    fn pick_mention(&mut self, rel: String) {
+        let start = self
+            .input
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        self.input.truncate(start);
+        self.input.push_str(&format!("@{rel} "));
+    }
+
+    /// Build the project part of the prompt: the folder tree plus the contents
+    /// of attached and @mentioned files, within a size budget. Returns the text
+    /// and the list of files that made it in.
+    fn project_context(&mut self, message: &str) -> (String, Vec<String>) {
+        self.context_note.clear();
+        let Some(project) = &self.project else {
+            return (String::new(), Vec::new());
+        };
+
+        let mut files: Vec<String> = self.attached.iter().cloned().collect();
+        for rel in project.resolve_mentions(message) {
+            if !files.contains(&rel) {
+                files.push(rel);
+            }
+        }
+
+        // About 35% of the context window, at roughly 4 characters per token.
+        let budget = self.cfg.num_ctx as usize * 7 / 5;
+        let ctx = project.build_context(&files, budget);
+        let overview = project.tree_overview((budget / 4).min(3000));
+
+        let mut text = format!("Folder: {}\n\nFile tree:\n{}", project.name, overview);
+        if !ctx.text.is_empty() {
+            text.push_str("\n## File contents\n\n");
+            text.push_str(&ctx.text);
+        }
+
+        let mut parts = Vec::new();
+        if !ctx.included.is_empty() {
+            parts.push(format!("{} file(s) included", ctx.included.len()));
+        }
+        if !ctx.skipped.is_empty() {
+            parts.push(format!("{} skipped: unreadable or over budget", ctx.skipped.len()));
+        }
+        self.context_note = if parts.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", parts.join(", "))
+        };
+
+        (text, ctx.included)
     }
 
     // ---- chat history -----------------------------------------------------
@@ -746,7 +950,17 @@ impl App {
 
     pub fn view(&self) -> Element<'_, Message> {
         let page: Element<'_, Message> = match self.screen {
-            Screen::Chat => ui::chat::view(self),
+            Screen::Chat => {
+                let chat = ui::chat::view(self);
+                if self.show_panel {
+                    row![chat, ui::project_panel::view(self)]
+                        .spacing(14)
+                        .height(Length::Fill)
+                        .into()
+                } else {
+                    chat
+                }
+            }
             Screen::Memory => ui::memory::view(self),
             Screen::Settings => ui::settings::view(self),
         };
@@ -766,4 +980,24 @@ impl App {
 
 fn scroll_to_end() -> Task<Message> {
     scrollable::snap_to(ui::chat::scroll_id(), scrollable::RelativeOffset::END)
+}
+
+/// Native "choose folder" dialog.
+async fn pick_folder() -> Option<PathBuf> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Open project folder")
+        .pick_folder()
+        .await
+        .map(|handle| handle.path().to_path_buf())
+}
+
+/// Turn a typed path into a real one: strips quotes and expands a leading `~/`.
+fn expand_home(raw: &str) -> PathBuf {
+    let raw = raw.trim().trim_matches(|c| c == '"' || c == '\'');
+    if let Some(rest) = raw.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(raw)
 }

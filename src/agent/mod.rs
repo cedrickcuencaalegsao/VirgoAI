@@ -26,6 +26,9 @@ pub struct ChatMessage {
     /// Whether the reasoning panel is expanded (UI state, not saved).
     #[serde(skip)]
     pub show_thinking: bool,
+    /// Project files that were included with this message.
+    #[serde(default)]
+    pub files: Vec<String>,
 }
 
 impl ChatMessage {
@@ -36,6 +39,12 @@ impl ChatMessage {
             thinking: String::new(),
             think_secs: None,
             show_thinking: false,
+            files: Vec::new(),
         }
+    }
+
+    pub fn with_files(mut self, files: Vec<String>) -> Self {
+        self.files = files;
+        self
     }
 }

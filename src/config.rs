@@ -16,6 +16,8 @@ pub struct Config {
     pub use_planner: bool,
     pub planner_think: bool,
     pub executor_think: bool,
+    /// Folder reopened at startup (empty = none).
+    pub last_project: String,
 }
 
 impl Default for Config {
@@ -30,6 +32,7 @@ impl Default for Config {
             use_planner: true,
             planner_think: true,
             executor_think: false,
+            last_project: String::new(),
         }
     }
 }

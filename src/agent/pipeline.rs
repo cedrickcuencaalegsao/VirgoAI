@@ -8,17 +8,21 @@ const HISTORY_LIMIT: usize = 10;
 const PLANNER_SYSTEM: &str = "You are the planning stage of a local assistant. \
 Think carefully about the user's task and write a short numbered plan (at most 7 steps) \
 that another model will follow. Do NOT carry out the task and do NOT write the final answer \
-or full code. Mention any risks or missing information. Use the memory notes if they are relevant.";
+or full code. Mention any risks or missing information. Use the memory notes if they are relevant. \
+If project files are provided, plan around them and refer to file paths.";
 
 const EXECUTOR_SYSTEM: &str = "You are the execution stage of a local assistant. \
 Answer the user's request directly and accurately. If a plan is provided, follow it. \
-Use the memory notes when they are relevant, and do not mention them unless asked.";
+Use the memory notes when they are relevant, and do not mention them unless asked. \
+If project files are provided, base your answer on them, mention file paths, and never invent files that are not listed.";
 
 /// Everything captured when the user hits Send, kept until the executor starts.
 pub struct Pending {
     pub task: String,
     pub memory: String,
     pub history: Vec<ChatMsg>,
+    /// Folder tree and file contents from the open project (may be empty).
+    pub project: String,
 }
 
 /// Recent user/assistant turns, newest last. Plans and errors are left out.
@@ -43,6 +47,7 @@ pub fn history_from(messages: &[ChatMessage]) -> Vec<ChatMsg> {
 pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
     let mut system = String::from(PLANNER_SYSTEM);
     append_memory(&mut system, &pending.memory);
+    append_project(&mut system, &pending.project);
 
     let mut messages = vec![ChatMsg::system(system)];
     messages.extend(pending.history.iter().cloned());
@@ -61,6 +66,7 @@ pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
 pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> ChatRequest {
     let mut system = String::from(EXECUTOR_SYSTEM);
     append_memory(&mut system, &pending.memory);
+    append_project(&mut system, &pending.project);
     if let Some(plan) = plan {
         system.push_str("\n\n# Plan to follow\n");
         system.push_str(plan);
@@ -84,6 +90,13 @@ fn append_memory(system: &mut String, memory: &str) {
     if !memory.trim().is_empty() {
         system.push_str("\n\n# Memory notes (from the user's local files)\n");
         system.push_str(memory);
+    }
+}
+
+fn append_project(system: &mut String, project: &str) {
+    if !project.trim().is_empty() {
+        system.push_str("\n\n# Project (the user's open folder)\n");
+        system.push_str(project);
     }
 }
 

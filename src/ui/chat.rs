@@ -4,9 +4,10 @@ use iced::widget::{
 };
 use iced::{Element, Length, Theme};
 
-use super::{markdown, style};
+use super::{markdown, short, style};
 use crate::agent::{ChatMessage, Role};
 use crate::app::{App, Message};
+use crate::icons;
 
 pub fn scroll_id() -> scrollable::Id {
     scrollable::Id::new("chat-scroll")
@@ -52,6 +53,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
         "Direct answer"
     };
 
+    let panel_color = if app.show_panel { icons::accent() } else { icons::muted() };
+
     let header = row![
         column![
             text("Conversation").size(22).font(style::bold()),
@@ -60,12 +63,16 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(2),
         horizontal_space(),
         pickers,
-        button(text("Refresh").size(12))
+        button(icons::label(icons::refresh_cw(), "Refresh", 12, icons::muted()))
             .padding([7, 12])
             .on_press(Message::RefreshModels)
             .style(style::ghost_button),
+        button(icons::tint(icons::panel_right(), 18.0, panel_color))
+            .padding(8)
+            .on_press(Message::TogglePanel)
+            .style(style::ghost_button),
     ]
-    .spacing(12)
+    .spacing(10)
     .align_y(Vertical::Center);
 
     // ---- messages ----
@@ -91,30 +98,41 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // ---- composer ----
     let remember = row![
         horizontal_space(),
-        button(text("Remember last reply").size(12))
-            .padding([6, 12])
-            .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
-            .style(style::ghost_button),
+        button(icons::label(
+            icons::database(),
+            "Remember last reply",
+            12,
+            icons::muted()
+        ))
+        .padding([6, 12])
+        .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
+        .style(style::ghost_button),
     ];
 
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {
-        button(text("Stop").size(14))
-            .padding([10, 20])
+        button(icons::label(icons::square(), "Stop", 14, icons::on_danger()))
+            .padding([10, 18])
             .on_press(Message::Stop)
             .style(style::danger_button)
             .into()
     } else {
-        button(text("Send").size(14))
-            .padding([10, 20])
+        button(icons::label(icons::send(), "Send", 14, icons::on_primary()))
+            .padding([10, 18])
             .on_press_maybe(can_send.then_some(Message::Send))
             .style(style::primary_button)
             .into()
     };
 
+    let placeholder = if app.project.is_some() {
+        "Message Virgo... (type @ to mention a project file)"
+    } else {
+        "Message Virgo..."
+    };
+
     let composer = container(
         row![
-            text_input("Message Virgo...", &app.input)
+            text_input(placeholder, &app.input)
                 .on_input(Message::InputChanged)
                 .on_submit(Message::Send)
                 .padding(12)
@@ -128,12 +146,107 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .padding(6)
     .style(style::composer);
 
-    column![header, history, remember, composer]
-        .spacing(12)
+    let mut page = column![header, history].spacing(12);
+    if let Some(suggestions) = suggestions(app) {
+        page = page.push(suggestions);
+    }
+    if let Some(chips) = attachments(app) {
+        page = page.push(chips);
+    }
+    page.push(remember)
+        .push(composer)
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
 }
+
+// ---------------------------------------------------------------------------
+// Project files: attached chips and @mention suggestions
+// ---------------------------------------------------------------------------
+
+/// Files attached from the project panel, shown above the composer.
+fn attachments(app: &App) -> Option<Element<'_, Message>> {
+    if app.project.is_none() || app.attached.is_empty() {
+        return None;
+    }
+
+    let mut chips = row![icons::tint(icons::paperclip(), 14.0, icons::accent())]
+        .spacing(6)
+        .align_y(Vertical::Center);
+
+    for rel in app.attached.iter().take(3) {
+        let name = rel.rsplit('/').next().unwrap_or(rel);
+        chips = chips.push(
+            button(
+                row![
+                    text(short(name, 18)).size(12),
+                    icons::tint(icons::x(), 11.0, icons::muted()),
+                ]
+                .spacing(4)
+                .align_y(Vertical::Center),
+            )
+            .padding([4, 8])
+            .on_press(Message::ToggleAttach(rel.clone()))
+            .style(style::chip),
+        );
+    }
+    if app.attached.len() > 3 {
+        chips = chips.push(
+            text(format!("+{} more", app.attached.len() - 3))
+                .size(12)
+                .style(style::dim),
+        );
+    }
+
+    Some(
+        chips
+            .push(horizontal_space())
+            .push(
+                button(text("Clear").size(12))
+                    .padding([4, 8])
+                    .on_press(Message::ClearAttached)
+                    .style(style::ghost_button),
+            )
+            .into(),
+    )
+}
+
+/// The `@query` being typed at the end of the input, if any.
+fn mention_query(input: &str) -> Option<&str> {
+    let token = input.rsplit(char::is_whitespace).next()?;
+    token.strip_prefix('@')
+}
+
+/// Autocomplete list for `@` mentions.
+fn suggestions(app: &App) -> Option<Element<'_, Message>> {
+    let project = app.project.as_ref()?;
+    let query = mention_query(&app.input)?;
+    let hits = project.suggest(query, 6);
+    if hits.is_empty() {
+        return None;
+    }
+
+    let list = column(hits.into_iter().map(|entry| {
+        let icon = if entry.is_dir {
+            icons::folder()
+        } else {
+            icons::file_text()
+        };
+        button(icons::label(icon, entry.rel.as_str(), 13, icons::muted()))
+            .width(Length::Fill)
+            .padding([6, 10])
+            .on_press(Message::PickMention(entry.rel.clone()))
+            .style(style::nav_item(false))
+            .into()
+    }))
+    .spacing(2);
+
+    Some(container(list).padding(6).style(style::card).into())
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
 
 fn welcome<'a>() -> Element<'a, Message> {
     container(
@@ -144,7 +257,8 @@ fn welcome<'a>() -> Element<'a, Message> {
                 .style(style::accent),
             text(
                 "A planner model thinks it through, an executor model answers, \
-                 and your markdown notes keep the memory."
+                 and your markdown notes keep the memory. Open a project folder \
+                 in the right panel to chat about your code."
             )
             .size(15)
             .style(style::dim)
@@ -164,7 +278,15 @@ fn welcome<'a>() -> Element<'a, Message> {
 fn bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a, Message> {
     match msg.role {
         Role::User => {
-            let bubble = container(text(msg.content.as_str()).size(15))
+            let mut content = column![text(msg.content.as_str()).size(15)].spacing(6);
+            if !msg.files.is_empty() {
+                content = content.push(
+                    text(format!("Files: {}", msg.files.join(", ")))
+                        .size(11)
+                        .style(style::dim),
+                );
+            }
+            let bubble = container(content)
                 .padding([10, 14])
                 .max_width(640)
                 .style(style::user_bubble);
@@ -203,7 +325,7 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
         text(label).size(12).font(style::bold()).style(style::accent),
         text(model).size(11).style(style::dim),
         horizontal_space(),
-        button(text("Copy").size(11))
+        button(icons::label(icons::copy(), "Copy", 11, icons::muted()))
             .padding([3, 10])
             .on_press_maybe(
                 (!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone()))

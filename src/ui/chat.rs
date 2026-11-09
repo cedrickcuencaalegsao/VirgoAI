@@ -48,10 +48,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .style(style::pick),
         );
 
-    let subtitle = if app.cfg.use_planner {
+    let mode = if app.cfg.use_planner {
         "Plan first, then answer"
     } else {
         "Direct answer"
+    };
+    let subtitle = match app.chat_workspace_name() {
+        Some(name) => format!("{mode} · Project: {name}"),
+        None => mode.to_string(),
     };
 
     let panel_color = if app.show_panel {

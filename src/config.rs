@@ -18,6 +18,8 @@ pub struct Config {
     pub executor_think: bool,
     /// Folder reopened at startup (empty = none).
     pub last_project: String,
+    /// Project (folder name) that new chats are saved into. Empty = none.
+    pub active_workspace: String,
 }
 
 impl Default for Config {
@@ -33,6 +35,7 @@ impl Default for Config {
             planner_think: true,
             executor_think: false,
             last_project: String::new(),
+            active_workspace: String::new(),
         }
     }
 }

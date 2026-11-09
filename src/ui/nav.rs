@@ -8,23 +8,42 @@ use crate::icons;
 pub fn view(app: &App) -> Element<'_, Message> {
     let brand = column![
         row![
-            text("Virgo").size(26).font(style::bold()).style(style::accent),
+            text("Virgo")
+                .size(26)
+                .font(style::bold())
+                .style(style::accent),
             text(" AI").size(26).font(style::bold()),
         ],
         text("Runs locally on your Mac").size(12).style(style::dim),
     ]
     .spacing(2);
 
-    let new_chat = button(icons::label(icons::plus(), "New chat", 14, icons::on_primary()))
-        .width(Length::Fill)
-        .padding([10, 14])
-        .on_press_maybe((!app.is_busy()).then_some(Message::NewChat))
-        .style(style::primary_button);
+    let new_chat = button(icons::label(
+        icons::plus(),
+        "New chat",
+        14,
+        icons::on_primary(),
+    ))
+    .width(Length::Fill)
+    .padding([10, 14])
+    .on_press_maybe((!app.is_busy()).then_some(Message::NewChat))
+    .style(style::primary_button);
 
     let items = column![
+        item(
+            icons::folder_kanban(),
+            "Projects",
+            Screen::Projects,
+            app.screen
+        ),
         item(icons::message_square(), "Chat", Screen::Chat, app.screen),
         item(icons::database(), "Memory", Screen::Memory, app.screen),
-        item(icons::sliders_horizontal(), "Settings", Screen::Settings, app.screen),
+        item(
+            icons::sliders_horizontal(),
+            "Settings",
+            Screen::Settings,
+            app.screen
+        ),
     ]
     .spacing(4);
 
@@ -33,7 +52,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
         text("No chats yet").size(12).style(style::dim).into()
     } else {
         scrollable(
-            column(app.chats.iter().map(|chat| chat_row(app, &chat.id, &chat.title))).spacing(2),
+            column(
+                app.chats
+                    .iter()
+                    .map(|chat| chat_row(app, &chat.id, &chat.title)),
+            )
+            .spacing(2),
         )
         .height(Length::Fill)
         .into()
@@ -45,7 +69,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
     } else {
         "off"
     };
+    let project = app
+        .active_workspace_name()
+        .unwrap_or_else(|| "none".to_string());
     let models = column![
+        text("PROJECT").size(10).style(style::dim),
+        text(short(&project, 24)).size(13),
         text("PLANNER").size(10).style(style::dim),
         text(planner).size(13),
         text("EXECUTOR").size(10).style(style::dim),
@@ -71,9 +100,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .into()
 }
 
-fn item<'a>(icon: Svg<'a>, label: &'a str, target: Screen, current: Screen) -> Element<'a, Message> {
+fn item<'a>(
+    icon: Svg<'a>,
+    label: &'a str,
+    target: Screen,
+    current: Screen,
+) -> Element<'a, Message> {
     let active = target == current;
-    let color = if active { icons::accent() } else { icons::muted() };
+    let color = if active {
+        icons::accent()
+    } else {
+        icons::muted()
+    };
 
     button(icons::label(icon, label, 14, color))
         .width(Length::Fill)

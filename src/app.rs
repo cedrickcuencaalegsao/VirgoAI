@@ -16,10 +16,12 @@ use crate::ollama::client;
 use crate::ollama::types::{ChatRequest, StreamEvent};
 use crate::project::Project;
 use crate::ui;
+use crate::workspaces::{self, Workspace};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Chat,
+    Projects,
     Memory,
     Settings,
 }
@@ -102,6 +104,19 @@ pub enum Message {
     NewNoteNameChanged(String),
     CreateNote,
 
+    // Projects
+    NewWorkspaceNameChanged(String),
+    CreateWorkspace,
+    SelectWorkspace(String),
+    DeleteWorkspace(String),
+    ActivateWorkspace(Option<String>),
+    SelectWorkspaceNote(String),
+    WorkspaceEditorAction(text_editor::Action),
+    SaveWorkspaceNote,
+    DeleteWorkspaceNote,
+    /// Chat id taken from a project note's file name.
+    OpenWorkspaceChat(String),
+
     // Settings
     SettingsUrlChanged(String),
     SettingsMemoryDirChanged(String),
@@ -182,6 +197,18 @@ pub struct App {
     scout_must: Vec<String>,
     /// Files the planner actually read for this request.
     scout_files: Vec<String>,
+
+    // Projects
+    pub workspaces: Vec<Workspace>,
+    /// Project that new chats are saved into.
+    pub active_workspace: Option<String>,
+    /// Project of the conversation on screen (fixed when the chat is first saved).
+    chat_project: Option<String>,
+    pub new_workspace_name: String,
+    pub selected_workspace: Option<String>,
+    pub workspace_notes: Vec<String>,
+    pub selected_ws_note: Option<String>,
+    pub ws_editor: text_editor::Content,
 }
 
 impl App {
@@ -199,6 +226,9 @@ impl App {
         } else {
             Project::scan(PathBuf::from(&cfg.last_project)).ok()
         };
+        let workspace_list = workspaces::list();
+        let active_workspace = Some(cfg.active_workspace.clone())
+            .filter(|s| workspace_list.iter().any(|w| &w.slug == s));
 
         let app = App {
             cfg,
@@ -240,6 +270,14 @@ impl App {
             suggesting: None,
             scout_must: Vec::new(),
             scout_files: Vec::new(),
+            workspaces: workspace_list,
+            active_workspace,
+            chat_project: None,
+            new_workspace_name: String::new(),
+            selected_workspace: None,
+            workspace_notes: Vec::new(),
+            selected_ws_note: None,
+            ws_editor: text_editor::Content::new(),
         };
 
         let task = Task::perform(client::list_models(url), Message::ModelsLoaded);
@@ -616,6 +654,44 @@ impl App {
                 };
                 Task::none()
             }
+            // ---- projects ----
+            Message::NewWorkspaceNameChanged(value) => {
+                self.new_workspace_name = value;
+                Task::none()
+            }
+            Message::CreateWorkspace => {
+                self.create_workspace();
+                Task::none()
+            }
+            Message::SelectWorkspace(slug) => {
+                self.select_workspace(slug);
+                Task::none()
+            }
+            Message::DeleteWorkspace(slug) => {
+                self.delete_workspace(slug);
+                Task::none()
+            }
+            Message::ActivateWorkspace(slug) => {
+                self.activate_workspace(slug);
+                Task::none()
+            }
+            Message::SelectWorkspaceNote(name) => {
+                self.select_workspace_note(name);
+                Task::none()
+            }
+            Message::WorkspaceEditorAction(action) => {
+                self.ws_editor.perform(action);
+                Task::none()
+            }
+            Message::SaveWorkspaceNote => {
+                self.save_workspace_note();
+                Task::none()
+            }
+            Message::DeleteWorkspaceNote => {
+                self.delete_workspace_note();
+                Task::none()
+            }
+            Message::OpenWorkspaceChat(id) => self.open_chat(id),
         }
     }
 
@@ -645,7 +721,10 @@ impl App {
 
         // Gather context BEFORE adding the new message to the history.
         let history = pipeline::history_from(&self.messages);
-        let notes = self.store.load_all();
+        let mut notes = self.store.load_all();
+        if let Some(slug) = self.chat_workspace() {
+            notes.extend(workspaces::load_notes(&slug, self.current_chat.as_deref()));
+        }
         let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
         let memory = retrieval::build_context(&notes, &text, budget_chars);
 
@@ -1115,7 +1194,6 @@ impl App {
 
     /// Write the current conversation to disk and refresh the sidebar list.
     fn save_chat(&mut self) {
-        // Leave out empty bubbles left behind by a stopped or failed reply.
         let messages: Vec<ChatMessage> = self
             .messages
             .iter()
@@ -1130,17 +1208,31 @@ impl App {
             return;
         }
 
+        // A chat belongs to the project that was active when it was first saved.
+        if self.current_chat.is_none() {
+            self.chat_project = self.active_workspace.clone();
+        }
         let id = self.current_chat.get_or_insert_with(chats::new_id).clone();
         let chat = Chat {
             id,
             title: chats::title_from(&messages),
             updated: chats::now_secs(),
             messages,
+            project: self.chat_project.clone(),
         };
 
         match chats::save(&chat) {
             Ok(()) => self.chats = chats::list(),
             Err(e) => self.status = format!("Could not save chat: {e}"),
+        }
+
+        // Also keep it as a markdown note in the project folder (the project's memory).
+        if let Some(slug) = &chat.project {
+            if let Err(e) = workspaces::save_chat(slug, &chat) {
+                self.status = format!("Could not save to project: {e}");
+            } else if self.selected_workspace.as_deref() == Some(slug.as_str()) {
+                self.refresh_workspace_notes();
+            }
         }
     }
 
@@ -1150,6 +1242,11 @@ impl App {
         }
         match chats::load(&id) {
             Ok(chat) => {
+                let project = chat
+                    .project
+                    .clone()
+                    .filter(|p| self.workspaces.iter().any(|w| &w.slug == p));
+                self.chat_project = project;
                 self.messages = chat.messages;
                 self.current_chat = Some(chat.id);
                 self.pending = None;
@@ -1368,6 +1465,7 @@ impl App {
             }
             Screen::Memory => ui::memory::view(self),
             Screen::Settings => ui::settings::view(self),
+            Screen::Projects => ui::workspaces::view(self),
         };
 
         let footer = text(self.status.as_str()).size(12).style(ui::style::dim);
@@ -1528,6 +1626,142 @@ impl App {
             project.tree_overview((budget / 4).min(3000)),
             ctx.text
         );
+    }
+        // ---- projects ---------------------------------------------------------
+
+    /// Project the conversation on screen is saved into (and recalled from).
+    pub fn chat_workspace(&self) -> Option<String> {
+        if self.current_chat.is_some() {
+            self.chat_project.clone()
+        } else {
+            self.active_workspace.clone()
+        }
+    }
+
+    pub fn workspace_name(&self, slug: &str) -> String {
+        self.workspaces
+            .iter()
+            .find(|w| w.slug == slug)
+            .map(|w| w.name.clone())
+            .unwrap_or_else(|| slug.to_string())
+    }
+
+    pub fn active_workspace_name(&self) -> Option<String> {
+        self.active_workspace.as_deref().map(|s| self.workspace_name(s))
+    }
+
+    pub fn chat_workspace_name(&self) -> Option<String> {
+        self.chat_workspace().map(|s| self.workspace_name(&s))
+    }
+
+    fn create_workspace(&mut self) {
+        match workspaces::create(&self.new_workspace_name) {
+            Ok(slug) => {
+                self.new_workspace_name.clear();
+                self.workspaces = workspaces::list();
+                self.select_workspace(slug.clone());
+                self.activate_workspace(Some(slug));
+            }
+            Err(e) => self.status = format!("Could not create project: {e}"),
+        }
+    }
+
+    fn select_workspace(&mut self, slug: String) {
+        self.selected_workspace = Some(slug);
+        self.selected_ws_note = None;
+        self.ws_editor = text_editor::Content::new();
+        self.refresh_workspace_notes();
+    }
+
+    fn refresh_workspace_notes(&mut self) {
+        self.workspace_notes = self
+            .selected_workspace
+            .as_deref()
+            .map(workspaces::notes)
+            .unwrap_or_default();
+    }
+
+    fn activate_workspace(&mut self, slug: Option<String>) {
+        let slug = slug.filter(|s| workspaces::exists(s));
+        self.cfg.active_workspace = slug.clone().unwrap_or_default();
+        self.persist();
+        self.status = match &slug {
+            Some(s) => format!("New chats are saved to project \"{}\"", self.workspace_name(s)),
+            None => "No active project: new chats are not saved as project memory".into(),
+        };
+        self.active_workspace = slug;
+    }
+
+    fn delete_workspace(&mut self, slug: String) {
+        if let Err(e) = workspaces::delete(&slug) {
+            self.status = format!("Could not delete project: {e}");
+            return;
+        }
+        if self.selected_workspace.as_deref() == Some(slug.as_str()) {
+            self.selected_workspace = None;
+            self.selected_ws_note = None;
+            self.workspace_notes.clear();
+            self.ws_editor = text_editor::Content::new();
+        }
+        if self.active_workspace.as_deref() == Some(slug.as_str()) {
+            self.active_workspace = None;
+            self.cfg.active_workspace.clear();
+            self.persist();
+        }
+        if self.chat_project.as_deref() == Some(slug.as_str()) {
+            self.chat_project = None;
+        }
+        self.workspaces = workspaces::list();
+        self.status = "Project deleted".into();
+    }
+
+    fn select_workspace_note(&mut self, name: String) {
+        let Some(slug) = self.selected_workspace.clone() else {
+            return;
+        };
+        match workspaces::store(&slug).and_then(|s| s.read(&name)) {
+            Ok(content) => {
+                self.ws_editor = text_editor::Content::with_text(&content);
+                self.selected_ws_note = Some(name);
+            }
+            Err(e) => self.status = format!("Could not open {name}: {e}"),
+        }
+    }
+
+    fn save_workspace_note(&mut self) {
+        let (Some(slug), Some(name)) =
+            (self.selected_workspace.clone(), self.selected_ws_note.clone())
+        else {
+            return;
+        };
+        let text = self.ws_editor.text();
+        self.status = match workspaces::store(&slug).and_then(|s| s.write(&name, &text)) {
+            Ok(_) => format!("Saved {name}"),
+            Err(e) => format!("Could not save {name}: {e}"),
+        };
+        if name == "project.md" {
+            // The project's display name comes from its first heading.
+            self.workspaces = workspaces::list();
+        }
+    }
+
+    fn delete_workspace_note(&mut self) {
+        let (Some(slug), Some(name)) =
+            (self.selected_workspace.clone(), self.selected_ws_note.clone())
+        else {
+            return;
+        };
+        if name == "project.md" {
+            self.status = "project.md cannot be deleted".into();
+            return;
+        }
+        self.status = match workspaces::store(&slug).and_then(|s| s.delete(&name)) {
+            Ok(()) => format!("Deleted {name}"),
+            Err(e) => format!("Could not delete {name}: {e}"),
+        };
+        self.selected_ws_note = None;
+        self.ws_editor = text_editor::Content::new();
+        self.refresh_workspace_notes();
     }
 }
 

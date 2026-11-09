@@ -8,6 +8,7 @@ mod memory;
 mod ollama;
 mod project;
 mod ui;
+mod workspaces;
 
 fn main() -> iced::Result {
     iced::application("Virgo AI", app::App::update, app::App::view)

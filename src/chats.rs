@@ -10,14 +10,14 @@ use serde::{Deserialize, Serialize};
 use crate::agent::{ChatMessage, Role};
 use crate::config::app_dir;
 
-/// A full conversation as stored on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chat {
     pub id: String,
     pub title: String,
-    /// Unix time (seconds) of the last save.
-    pub updated: u64,
+    pub updated: u64,          // keep whatever type you already have
     pub messages: Vec<ChatMessage>,
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// What the sidebar needs to list a conversation.

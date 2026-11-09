@@ -4,7 +4,7 @@ A native macOS desktop app built with **Rust** and **iced** that talks to a loca
 
 ## Features
 
-- **Project folder panel (right side)**: open a folder, browse its tree, click files to attach them, or type `@` in the chat to mention files and folders (with autocomplete). The model always gets the folder's file tree, plus the contents of attached and mentioned files.
+- **Projects**: group conversations per project. While a project is active, every chat is also saved as a markdown note in `VirgoAI/projects/<project>/`. `project.md` (the description and feature list) is always sent to the models, and past conversations are recalled by keyword when you ask things like "do you remember the clear button feature?"
 - **Code panel with AI line edits**: click the eye on a file to open it in a code panel. Every line has a bulb button: click it, optionally say what to change, and the model proposes a replacement. The original shows red and the new text green; nothing is written until you press **Apply** (with a one-step **Undo apply**).
 - **Live thinking indicator**: an animated `Thinking...` with a timer while a model reasons; the reasoning collapses to `Thought for 4.2s` when the answer starts.
 - **Planner then executor**: both stages stream. Stop cancels either one.

@@ -1,6 +1,7 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, column, container, horizontal_space, pick_list, row, scrollable, text, text_input,
+    button, column, container, horizontal_space, pick_list, row, scrollable, text, text_editor,
+    text_input,
 };
 use iced::{Element, Length, Theme};
 
@@ -53,7 +54,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
         "Direct answer"
     };
 
-    let panel_color = if app.show_panel { icons::accent() } else { icons::muted() };
+    let panel_color = if app.show_panel {
+        icons::accent()
+    } else {
+        icons::muted()
+    };
 
     let header = row![
         column![
@@ -63,10 +68,15 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(2),
         horizontal_space(),
         pickers,
-        button(icons::label(icons::refresh_cw(), "Refresh", 12, icons::muted()))
-            .padding([7, 12])
-            .on_press(Message::RefreshModels)
-            .style(style::ghost_button),
+        button(icons::label(
+            icons::refresh_cw(),
+            "Refresh",
+            12,
+            icons::muted()
+        ))
+        .padding([7, 12])
+        .on_press(Message::RefreshModels)
+        .style(style::ghost_button),
         button(icons::tint(icons::panel_right(), 18.0, panel_color))
             .padding(8)
             .on_press(Message::TogglePanel)
@@ -111,11 +121,16 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {
-        button(icons::label(icons::square(), "Stop", 14, icons::on_danger()))
-            .padding([10, 18])
-            .on_press(Message::Stop)
-            .style(style::danger_button)
-            .into()
+        button(icons::label(
+            icons::square(),
+            "Stop",
+            14,
+            icons::on_danger(),
+        ))
+        .padding([10, 18])
+        .on_press(Message::Stop)
+        .style(style::danger_button)
+        .into()
     } else {
         button(icons::label(icons::send(), "Send", 14, icons::on_primary()))
             .padding([10, 18])
@@ -150,6 +165,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if let Some(suggestions) = suggestions(app) {
         page = page.push(suggestions);
     }
+    if app.reviewing {
+        page = page.push(plan_review(app));
+    }
+    if let Some(bar) = proposal_bar(app) {
+        page = page.push(bar);
+    }
     if let Some(chips) = attachments(app) {
         page = page.push(chips);
     }
@@ -158,6 +179,78 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+/// Editable plan with Run / Discard, shown while `app.reviewing`.
+fn plan_review(app: &App) -> Element<'_, Message> {
+    container(
+        column![
+            row![
+                text("Review the plan").size(14).font(style::bold()),
+                text("Edit it however you like. The model will follow your version.")
+                    .size(12)
+                    .style(style::dim),
+            ]
+            .spacing(10)
+            .align_y(Vertical::Center),
+            text_editor(&app.plan_editor)
+                .on_action(Message::PlanAction)
+                .height(Length::Fixed(180.0)),
+            row![
+                button(icons::label(
+                    icons::check(),
+                    "Run plan",
+                    13,
+                    icons::on_primary()
+                ))
+                .padding([8, 14])
+                .on_press(Message::RunPlan)
+                .style(style::primary_button),
+                button(text("Discard").size(13))
+                    .padding([8, 14])
+                    .on_press(Message::DiscardPlan)
+                    .style(style::ghost_button),
+            ]
+            .spacing(8),
+        ]
+        .spacing(8),
+    )
+    .padding(12)
+    .width(Length::Fill)
+    .style(style::plan_card)
+    .into()
+}
+
+/// One chip per file the model wants to change. Click to stage it in the code panel.
+fn proposal_bar(app: &App) -> Option<Element<'_, Message>> {
+    if app.is_busy() || app.proposals.is_empty() {
+        return None;
+    }
+
+    let mut files: Vec<&str> = Vec::new();
+    for p in &app.proposals {
+        if !files.contains(&p.file.as_str()) {
+            files.push(p.file.as_str());
+        }
+    }
+
+    let mut bar = row![
+        icons::tint(icons::lightbulb(), 14.0, icons::accent()),
+        text("Proposed changes:").size(12).style(style::dim),
+    ]
+    .spacing(6)
+    .align_y(Vertical::Center);
+
+    for file in files {
+        let count = app.proposals.iter().filter(|p| p.file == file).count();
+        let name = file.rsplit('/').next().unwrap_or(file);
+        bar = bar.push(
+            button(text(format!("{} ({count})", short(name, 22))).size(12))
+                .padding([4, 8])
+                .on_press(Message::ReviewChange(file.to_string()))
+                .style(style::chip),
+        );
+    }
+    Some(bar.into())
 }
 
 // ---------------------------------------------------------------------------
@@ -319,17 +412,18 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
     };
 
     // Is this the bubble the model is writing into right now?
-    let active = app.is_busy() && index + 1 == app.messages.len();
+    let active = app.is_working() && index + 1 == app.messages.len();
 
     let header = row![
-        text(label).size(12).font(style::bold()).style(style::accent),
+        text(label)
+            .size(12)
+            .font(style::bold())
+            .style(style::accent),
         text(model).size(11).style(style::dim),
         horizontal_space(),
         button(icons::label(icons::copy(), "Copy", 11, icons::muted()))
             .padding([3, 10])
-            .on_press_maybe(
-                (!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone()))
-            )
+            .on_press_maybe((!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone())))
             .style(style::ghost_button),
     ]
     .spacing(8)
@@ -375,7 +469,10 @@ fn thinking_header<'a>(
     let thinking_now = active && msg.think_secs.is_none();
 
     let label = if thinking_now {
-        let secs = app.think_started.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+        let secs = app
+            .think_started
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
         if msg.thinking.is_empty() {
             format!("Thinking{}", dots(app.tick))
         } else {

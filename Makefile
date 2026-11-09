@@ -2,7 +2,7 @@
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: all init run build release typecheck fmt clean models icons add-icon
+.PHONY: all init run build release typecheck fmt clean models icons add-icon dmg
 
 # ---------------------------------------------------------------------------
 # Project configuration (override on the CLI, e.g. `make run CARGO_ARGS=--release`)
@@ -21,7 +21,7 @@ LUCIDE_URL  := https://raw.githubusercontent.com/lucide-icons/lucide/main/icons
 # Icons the app itself uses (downloaded by `make init`)
 DEFAULT_ICONS := folder-open folder file-text chevron-right chevron-down refresh-cw x \
 	panel-right check plus message-square database sliders-horizontal copy send square \
-	trash-2 paperclip eye lightbulb undo-2
+	trash-2 paperclip
 
 # ---------------------------------------------------------------------------
 # Cargo shortcuts
@@ -125,3 +125,62 @@ $(ICON_GOALS):
 	@:
 endif
 endif
+
+# ---------------------------------------------------------------------------
+# DMG packaging (macOS)
+#   make dmg
+#   make dmg VERSION=1.2.0 BUNDLE_ID=com.you.virgoai
+# ---------------------------------------------------------------------------
+APP_NAME   ?= VirgoAI
+DMG_NAME   ?= $(APP_NAME).dmg
+DMG_PATH   ?= build
+APP_BINARY ?= target/release/virgo-ai
+ICON       ?= assets/icons/app-icon.png
+BUNDLE_ID  ?= com.example.virgoai
+VERSION    ?= 0.1.0
+
+APP_DIR := $(DMG_PATH)/$(APP_NAME).app
+STAGE   := $(DMG_PATH)/dmg-stage
+EXE     := $(notdir $(APP_BINARY))
+
+dmg: release
+	@test -f "$(APP_BINARY)" || { echo "Binary not found: $(APP_BINARY)"; echo "Available:"; ls target/release | grep -v '\.d$$'; exit 1; }
+	@echo "==> Building $(APP_NAME).app"
+	@rm -rf "$(APP_DIR)" "$(STAGE)" "$(DMG_PATH)/$(DMG_NAME)"
+	@mkdir -p "$(APP_DIR)/Contents/MacOS" "$(APP_DIR)/Contents/Resources" "$(STAGE)"
+	@cp "$(APP_BINARY)" "$(APP_DIR)/Contents/MacOS/$(EXE)"
+	@printf '%s\n' \
+	  '<?xml version="1.0" encoding="UTF-8"?>' \
+	  '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+	  '<plist version="1.0"><dict>' \
+	  '<key>CFBundleName</key><string>$(APP_NAME)</string>' \
+	  '<key>CFBundleDisplayName</key><string>$(APP_NAME)</string>' \
+	  '<key>CFBundleIdentifier</key><string>$(BUNDLE_ID)</string>' \
+	  '<key>CFBundleExecutable</key><string>$(EXE)</string>' \
+	  '<key>CFBundleIconFile</key><string>AppIcon</string>' \
+	  '<key>CFBundlePackageType</key><string>APPL</string>' \
+	  '<key>CFBundleShortVersionString</key><string>$(VERSION)</string>' \
+	  '<key>CFBundleVersion</key><string>$(VERSION)</string>' \
+	  '<key>NSHighResolutionCapable</key><true/>' \
+	  '</dict></plist>' > "$(APP_DIR)/Contents/Info.plist"
+	@if [ -f "$(ICON)" ]; then \
+	    echo "==> Generating app icon"; \
+	    iconset="$(DMG_PATH)/AppIcon.iconset"; \
+	    rm -rf "$$iconset"; mkdir -p "$$iconset"; \
+	    for s in 16 32 128 256 512; do \
+	        sips -z $$s $$s "$(ICON)" --out "$$iconset/icon_$${s}x$${s}.png" >/dev/null; \
+	        sips -z $$((s*2)) $$((s*2)) "$(ICON)" --out "$$iconset/icon_$${s}x$${s}@2x.png" >/dev/null; \
+	    done; \
+	    iconutil -c icns "$$iconset" -o "$(APP_DIR)/Contents/Resources/AppIcon.icns"; \
+	    rm -rf "$$iconset"; \
+	else \
+	    echo "Note: $(ICON) not found, building without an icon"; \
+	fi
+	@echo "==> Ad-hoc signing"
+	@codesign --force --deep -s - "$(APP_DIR)"
+	@echo "==> Creating DMG installer"
+	@cp -R "$(APP_DIR)" "$(STAGE)/"
+	@ln -s /Applications "$(STAGE)/Applications"
+	@hdiutil create -volname "$(APP_NAME)" -srcfolder "$(STAGE)" -ov -format UDZO "$(DMG_PATH)/$(DMG_NAME)"
+	@rm -rf "$(STAGE)"
+	@echo "Done: $(DMG_PATH)/$(DMG_NAME)"

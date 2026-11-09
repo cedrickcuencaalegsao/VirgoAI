@@ -93,6 +93,56 @@ impl CodeDoc {
 
     // ---- edits -----------------------------------------------------------
 
+        /// Turn a SEARCH/REPLACE block into pending line edits. The first matched
+    /// line gets the replacement, the other matched lines are deleted.
+    pub fn stage(&mut self, search: &str, replace: &str) -> Result<(), String> {
+        fn end(s: &str) -> &str {
+            s.trim_end()
+        }
+        fn both(s: &str) -> &str {
+            s.trim()
+        }
+
+        let needle: Vec<&str> = search.lines().collect();
+        if needle.is_empty() || needle.iter().all(|l| l.trim().is_empty()) {
+            return Err("empty search block".into());
+        }
+        if needle.len() > self.lines.len() {
+            return Err("search block is longer than the file".into());
+        }
+
+        let find = |norm: fn(&str) -> &str| -> Vec<usize> {
+            (0..=self.lines.len() - needle.len())
+                .filter(|&i| {
+                    needle
+                        .iter()
+                        .enumerate()
+                        .all(|(k, n)| norm(&self.lines[i + k]) == norm(n))
+                })
+                .collect()
+        };
+
+        // Exact (ignoring trailing spaces) first, then ignoring indentation.
+        let mut hits = find(end);
+        if hits.is_empty() {
+            hits = find(both);
+        }
+
+        match hits.as_slice() {
+            [] => Err("search block not found".into()),
+            [start] => {
+                let start = *start;
+                let replacement: Vec<String> = replace.lines().map(String::from).collect();
+                self.set_edit(start, replacement);
+                for i in start + 1..start + needle.len() {
+                    self.set_edit(i, Vec::new());
+                }
+                Ok(())
+            }
+            _ => Err("search block matches more than once".into()),
+        }
+    }
+
     pub fn set_edit(&mut self, line: usize, replacement: Vec<String>) {
         if line < self.lines.len() {
             self.edits.insert(line, replacement);

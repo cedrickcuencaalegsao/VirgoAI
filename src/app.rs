@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use iced::widget::{column, container, row, scrollable, text, text_editor};
 use iced::{Element, Length, Subscription, Task, Theme};
 
-use crate::agent::pipeline::{self, Pending};
+use crate::agent::pipeline::{self, Intent, Pending, Proposal};
 use crate::agent::{ChatMessage, Role};
 use crate::chats::{self, Chat, ChatSummary};
 use crate::code::CodeDoc;
@@ -48,6 +48,12 @@ pub enum Message {
     ToggleThinking(usize),
     /// Put text (a whole reply or one code block) on the clipboard.
     Copy(String),
+
+    PlanAction(text_editor::Action),
+    RunPlan,
+    DiscardPlan,
+    /// Open this file and stage the proposed edits for it.
+    ReviewChange(String),
 
     // Project panel
     TogglePanel,
@@ -124,6 +130,14 @@ pub struct App {
     pub pending: Option<Pending>,
     pub abort: Option<iced::task::Handle>,
 
+    /// What the last sent message asked for.
+    pub intent: Intent,
+    /// True while the user is reading or editing the plan.
+    pub reviewing: bool,
+    pub plan_editor: text_editor::Content,
+    /// Edit blocks returned by the executor, waiting to be staged per file.
+    pub proposals: Vec<Proposal>,
+
     /// Animation frame counter for the "Thinking..." dots.
     pub tick: u32,
     /// When the current stage started producing reasoning.
@@ -188,6 +202,10 @@ impl App {
             input: String::new(),
             pending: None,
             abort: None,
+            intent: Intent::Answer,
+            reviewing: false,
+            plan_editor: text_editor::Content::new(),
+            proposals: Vec::new(),
             tick: 0,
             think_started: None,
             inline_think: false,
@@ -217,17 +235,22 @@ impl App {
         ui::style::theme()
     }
 
-    /// The animation clock only runs while a model is working.
     pub fn subscription(&self) -> Subscription<Message> {
-        if self.is_busy() {
+        if self.is_working() {
             iced::time::every(Duration::from_millis(400)).map(|_| Message::Tick)
         } else {
             Subscription::none()
         }
     }
 
-    pub fn is_busy(&self) -> bool {
+    /// A model is streaming right now.
+    pub fn is_working(&self) -> bool {
         self.phase != Phase::Idle
+    }
+
+    /// Streaming, or waiting for the user to review the plan.
+    pub fn is_busy(&self) -> bool {
+        self.phase != Phase::Idle || self.reviewing
     }
 
     pub fn has_reply(&self) -> bool {
@@ -277,6 +300,19 @@ impl App {
                 self.status = "Copied to clipboard".into();
                 iced::clipboard::write(content)
             }
+
+            Message::PlanAction(action) => {
+                self.plan_editor.perform(action);
+                Task::none()
+            }
+            Message::DiscardPlan => {
+                self.reviewing = false;
+                self.pending = None;
+                self.status = "Plan discarded".into();
+                Task::none()
+            }
+            Message::RunPlan => self.run_plan(),
+            Message::ReviewChange(file) => self.review_change(file),
 
             // ---- project panel ----
             Message::TogglePanel => {
@@ -566,11 +602,24 @@ impl App {
     // -----------------------------------------------------------------------
 
     fn send(&mut self) -> Task<Message> {
-        let text = self.input.trim().to_string();
-        if text.is_empty() || self.is_busy() {
+        let raw = self.input.trim().to_string();
+        if raw.is_empty() || self.is_busy() {
             return Task::none();
         }
         self.input.clear();
+
+        // "/edit ..." forces the change workflow.
+        let (forced, text) = match raw.strip_prefix("/edit ") {
+            Some(rest) => (true, rest.trim().to_string()),
+            None => (false, raw),
+        };
+        self.intent = if forced && self.project.is_some() {
+            Intent::Change
+        } else {
+            pipeline::classify(&text, self.project.is_some())
+        };
+        self.proposals.clear();
+        self.reviewing = false;
 
         // Gather context BEFORE adding the new message to the history.
         let history = pipeline::history_from(&self.messages);
@@ -578,18 +627,25 @@ impl App {
         let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
         let memory = retrieval::build_context(&notes, &text, budget_chars);
 
-        // Folder tree + attached and @mentioned files from the open project.
         let (project, files) = self.project_context(&text);
 
         self.messages
             .push(ChatMessage::new(Role::User, text.clone()).with_files(files));
         self.save_chat();
-        let pending = Pending { task: text, memory, history, project };
+        let pending = Pending {
+            task: text,
+            memory,
+            history,
+            project,
+            intent: self.intent,
+        };
 
-        if self.cfg.use_planner {
+        // Code changes always get a plan, so there is something to review.
+        if self.cfg.use_planner || self.intent == Intent::Change {
             let request = pipeline::planner_request(&self.cfg, &pending);
             self.pending = Some(pending);
-            self.messages.push(ChatMessage::new(Role::Plan, String::new()));
+            self.messages
+                .push(ChatMessage::new(Role::Plan, String::new()));
             self.begin_stage(Phase::Planning);
             self.status = format!(
                 "Planning with {}...{}",
@@ -608,7 +664,8 @@ impl App {
         };
 
         let request = pipeline::executor_request(&self.cfg, &pending, plan.as_deref());
-        self.messages.push(ChatMessage::new(Role::Assistant, String::new()));
+        self.messages
+            .push(ChatMessage::new(Role::Assistant, String::new()));
         self.begin_stage(Phase::Executing);
         self.status = format!(
             "Answering with {}...{}",
@@ -662,22 +719,59 @@ impl App {
                     .unwrap_or_default();
 
                 if plan.is_empty() {
-                    // Keep the bubble only if it holds some reasoning.
                     let drop_it = self.messages.last().is_some_and(|m| m.thinking.is_empty());
                     if drop_it {
                         self.messages.pop();
                     }
-                    self.start_executor(None)
-                } else {
-                    if let Some(m) = self.messages.last_mut() {
-                        m.content = plan.clone();
-                    }
-                    self.start_executor(Some(plan))
+                    return self.start_executor(None);
                 }
+
+                if let Some(m) = self.messages.last_mut() {
+                    m.content = plan.clone();
+                }
+
+                if self.intent == Intent::Change {
+                    // Pause here: the user edits the plan, then presses Run plan.
+                    self.phase = Phase::Idle;
+                    self.reviewing = true;
+                    self.plan_editor = text_editor::Content::with_text(&plan);
+                    self.status = "Edit the plan if you like, then press Run plan".into();
+                    self.save_chat();
+                    return scroll_to_end();
+                }
+
+                self.start_executor(Some(plan))
             }
             Phase::Executing => {
                 self.phase = Phase::Idle;
-                self.status = "Done".into();
+
+                if self.intent == Intent::Change {
+                    let reply = self
+                        .messages
+                        .last()
+                        .map(|m| pipeline::strip_think_tags(&m.content))
+                        .unwrap_or_default();
+                    self.proposals = pipeline::parse_edits(&reply);
+
+                    let mut files: Vec<&str> = Vec::new();
+                    for p in &self.proposals {
+                        if !files.contains(&p.file.as_str()) {
+                            files.push(p.file.as_str());
+                        }
+                    }
+                    self.status = if self.proposals.is_empty() {
+                        "The model returned no edit blocks. Try rephrasing or edit the plan.".into()
+                    } else {
+                        format!(
+                            "{} change(s) in {} file(s). Click a file below to review it.",
+                            self.proposals.len(),
+                            files.len()
+                        )
+                    };
+                } else {
+                    self.status = "Done".into();
+                }
+
                 self.save_chat();
                 Task::none()
             }
@@ -691,6 +785,7 @@ impl App {
         }
         self.finish_thinking();
         self.phase = Phase::Idle;
+        self.reviewing = false;
         self.pending = None;
         self.status = "Stopped".into();
         self.save_chat();
@@ -710,13 +805,87 @@ impl App {
         }
 
         self.think_started = None;
-        self.messages.push(ChatMessage::new(Role::Error, error.clone()));
+        self.messages
+            .push(ChatMessage::new(Role::Error, error.clone()));
         self.phase = Phase::Idle;
         self.pending = None;
         self.abort = None;
         self.status = error;
         self.save_chat();
         scroll_to_end()
+    }
+
+    /// The user pressed "Run plan": run the executor with the (edited) plan.
+    fn run_plan(&mut self) -> Task<Message> {
+        if !self.reviewing {
+            return Task::none();
+        }
+        let plan = self.plan_editor.text().trim().to_string();
+        self.reviewing = false;
+
+        if let Some(m) = self.messages.last_mut() {
+            if m.role == Role::Plan {
+                m.content = plan.clone();
+            }
+        }
+        self.add_plan_files(&plan);
+
+        let plan = if plan.is_empty() { None } else { Some(plan) };
+        self.start_executor(plan)
+    }
+
+    /// The executor can only match text it can see, so add the contents of
+    /// every project file the plan mentions.
+    fn add_plan_files(&mut self, plan: &str) {
+        let budget = self.cfg.num_ctx as usize * 7 / 5;
+        let (Some(project), Some(pending)) = (self.project.as_ref(), self.pending.as_mut()) else {
+            return;
+        };
+        let files: Vec<String> = project
+            .entries
+            .iter()
+            .filter(|e| !e.is_dir && plan.contains(&e.rel))
+            .map(|e| e.rel.clone())
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let ctx = project.build_context(&files, budget);
+        pending
+            .project
+            .push_str("\n## Files named in the plan (edit these)\n\n");
+        pending.project.push_str(&ctx.text);
+    }
+
+    /// Open `file` in the code panel and stage its proposed edits as red/green rows.
+    fn review_change(&mut self, file: String) -> Task<Message> {
+        let task = self.open_file(file.clone());
+
+        let mut staged = 0;
+        let mut failed: Vec<String> = Vec::new();
+        if let Some(doc) = self.code.as_mut() {
+            if doc.rel == file {
+                for p in self.proposals.iter().filter(|p| p.file == file) {
+                    match doc.stage(&p.search, &p.replace) {
+                        Ok(()) => staged += 1,
+                        Err(e) => failed.push(e),
+                    }
+                }
+            } else {
+                return task; // open_file already set an error status
+            }
+        }
+
+        self.status = if failed.is_empty() {
+            format!("Staged {staged} change(s) in {file}. Press Apply to write them.")
+        } else {
+            format!(
+                "Staged {staged} change(s) in {file}; {} block(s) failed ({}). Use the bulb to fix them by hand.",
+                failed.len(),
+                failed[0]
+            )
+        };
+        task
     }
 
     // ---- code panel -------------------------------------------------------
@@ -912,7 +1081,10 @@ impl App {
             parts.push(format!("{} file(s) included", ctx.included.len()));
         }
         if !ctx.skipped.is_empty() {
-            parts.push(format!("{} skipped: unreadable or over budget", ctx.skipped.len()));
+            parts.push(format!(
+                "{} skipped: unreadable or over budget",
+                ctx.skipped.len()
+            ));
         }
         self.context_note = if parts.is_empty() {
             String::new()
@@ -942,10 +1114,7 @@ impl App {
             return;
         }
 
-        let id = self
-            .current_chat
-            .get_or_insert_with(chats::new_id)
-            .clone();
+        let id = self.current_chat.get_or_insert_with(chats::new_id).clone();
         let chat = Chat {
             id,
             title: chats::title_from(&messages),

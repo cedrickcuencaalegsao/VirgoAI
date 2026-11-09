@@ -24,13 +24,142 @@ Reply with ONLY the replacement code inside a single fenced code block, with no 
 Keep the same indentation style. Use exactly one line unless the change truly needs more. \
 If the line should be deleted, reply with an empty code block.";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Intent {
+    /// A question or explanation: planner (optional) then a normal answer.
+    Answer,
+    /// A code change: planner, user reviews the plan, executor returns edit blocks.
+    Change,
+}
+
+const PLANNER_CHANGE_SUFFIX: &str = "\n\nThe user wants the code changed. List every file to edit \
+as a line like `- path/to/file: what changes`, using exact relative paths from the file tree.";
+
+const EDIT_SYSTEM: &str = "You are a code editor. Follow the plan and the user's request. \
+For every change output exactly this format:\n\
+FILE: <relative path>\n\
+<<<<<<< SEARCH\n\
+<existing lines, copied exactly from the file>\n\
+=======\n\
+<new lines>\n\
+>>>>>>> REPLACE\n\
+Rules: SEARCH must match the file exactly (including indentation) and be unique in the file. \
+Keep blocks small. Use an empty REPLACE section to delete lines. Output only these blocks, no prose.";
+
+/// One search/replace block proposed by the model.
+#[derive(Debug, Clone)]
+pub struct Proposal {
+    pub file: String,
+    pub search: String,
+    pub replace: String,
+}
+
+/// Decide whether a message asks for a code change.
+pub fn classify(text: &str, has_project: bool) -> Intent {
+    if !has_project {
+        return Intent::Answer;
+    }
+    let t = text.trim().to_lowercase();
+    const QUESTIONS: &[&str] = &[
+        "what",
+        "why",
+        "how does",
+        "how do",
+        "explain",
+        "where",
+        "is ",
+        "does ",
+        "can you explain",
+    ];
+    const VERBS: &[&str] = &[
+        "add",
+        "implement",
+        "refactor",
+        "fix",
+        "change",
+        "rename",
+        "create",
+        "update",
+        "remove",
+        "delete",
+        "replace",
+        "rewrite",
+        "move",
+        "extract",
+        "convert",
+        "make",
+    ];
+    if QUESTIONS.iter().any(|q| t.starts_with(q)) {
+        return Intent::Answer;
+    }
+    let has_verb = t
+        .split(|c: char| !c.is_alphabetic())
+        .any(|w| VERBS.contains(&w));
+    if has_verb {
+        Intent::Change
+    } else {
+        Intent::Answer
+    }
+}
+
+/// Parse `FILE:` + SEARCH/REPLACE blocks out of the executor's reply.
+pub fn parse_edits(reply: &str) -> Vec<Proposal> {
+    let mut out = Vec::new();
+    let mut file = String::new();
+    let mut mode = 0; // 0 = outside, 1 = in SEARCH, 2 = in REPLACE
+    let mut search: Vec<&str> = Vec::new();
+    let mut replace: Vec<&str> = Vec::new();
+
+    for line in reply.lines() {
+        let t = line.trim();
+        match mode {
+            0 => {
+                if let Some(f) = t.strip_prefix("FILE:") {
+                    file = f
+                        .trim()
+                        .trim_matches('`')
+                        .trim_matches('*')
+                        .trim()
+                        .to_string();
+                } else if t.starts_with("<<<<<<<") {
+                    mode = 1;
+                }
+            }
+            1 => {
+                if t.starts_with("=======") {
+                    mode = 2;
+                } else {
+                    search.push(line);
+                }
+            }
+            _ => {
+                if t.starts_with(">>>>>>>") {
+                    if !file.is_empty() {
+                        out.push(Proposal {
+                            file: file.clone(),
+                            search: search.join("\n"),
+                            replace: replace.join("\n"),
+                        });
+                    }
+                    search.clear();
+                    replace.clear();
+                    mode = 0;
+                } else {
+                    replace.push(line);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Everything captured when the user hits Send, kept until the executor starts.
 pub struct Pending {
     pub task: String,
     pub memory: String,
     pub history: Vec<ChatMsg>,
-    /// Folder tree and file contents from the open project (may be empty).
     pub project: String,
+    pub intent: Intent,
 }
 
 /// Recent user/assistant turns, newest last. Plans and errors are left out.
@@ -54,6 +183,9 @@ pub fn history_from(messages: &[ChatMessage]) -> Vec<ChatMsg> {
 
 pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
     let mut system = String::from(PLANNER_SYSTEM);
+    if pending.intent == Intent::Change {
+        system.push_str(PLANNER_CHANGE_SUFFIX);
+    }
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
 
@@ -66,13 +198,20 @@ pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
         messages,
         stream: true,
         think: cfg.planner_think.then_some(true),
-        options: Options { num_ctx: cfg.num_ctx },
+        options: Options {
+            num_ctx: cfg.num_ctx,
+        },
         keep_alive: cfg.keep_alive.clone(),
     }
 }
 
 pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> ChatRequest {
-    let mut system = String::from(EXECUTOR_SYSTEM);
+    let base = if pending.intent == Intent::Change {
+        EDIT_SYSTEM
+    } else {
+        EXECUTOR_SYSTEM
+    };
+    let mut system = String::from(base);
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
     if let Some(plan) = plan {
@@ -89,7 +228,9 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         messages,
         stream: true,
         think: cfg.executor_think.then_some(true),
-        options: Options { num_ctx: cfg.num_ctx },
+        options: Options {
+            num_ctx: cfg.num_ctx,
+        },
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -123,7 +264,9 @@ pub fn line_edit_request(
         messages: vec![ChatMsg::system(LINE_EDIT_SYSTEM), ChatMsg::user(user)],
         stream: false,
         think: cfg.executor_think.then_some(true),
-        options: Options { num_ctx: cfg.num_ctx },
+        options: Options {
+            num_ctx: cfg.num_ctx,
+        },
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -174,7 +317,13 @@ fn fix_indent(original: &str, replacement: Vec<String>) -> Vec<String> {
     }
     replacement
         .into_iter()
-        .map(|l| if l.is_empty() { l } else { format!("{indent}{l}") })
+        .map(|l| {
+            if l.is_empty() {
+                l
+            } else {
+                format!("{indent}{l}")
+            }
+        })
         .collect()
 }
 

@@ -11,3 +11,4 @@
 *.tar.gz
 *.iml
 *.idea/
+.DS_Store

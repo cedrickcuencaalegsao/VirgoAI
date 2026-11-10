@@ -928,7 +928,23 @@ impl App {
                         .last()
                         .map(|m| pipeline::strip_think_tags(&m.content))
                         .unwrap_or_default();
-                    self.proposals = pipeline::parse_edits(&reply);
+                    let known: Vec<String> = self
+                        .project
+                        .as_ref()
+                        .map(|p| {
+                            p.entries
+                                .iter()
+                                .filter(|e| !e.is_dir)
+                                .map(|e| e.rel.clone())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let default_file = self.code.as_ref().map(|d| d.rel.clone()).or_else(|| {
+                        (self.scout_must.len() == 1)
+                            .then(|| self.scout_must.first().cloned())
+                            .flatten()
+                    });
+                    self.proposals = pipeline::parse_edits(&reply, &known, default_file.as_deref());
 
                     let mut files: Vec<&str> = Vec::new();
                     for p in &self.proposals {
@@ -937,7 +953,7 @@ impl App {
                         }
                     }
                     self.status = if self.proposals.is_empty() {
-                        "The model returned no edit blocks. Try rephrasing or edit the plan.".into()
+                        "No edit blocks found in the reply. Open the file you want changed in the code panel, keep the request small (one change), and try again.".into()
                     } else {
                         format!(
                             "{} change(s) in {} file(s). Click a file below to review it.",

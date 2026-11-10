@@ -53,15 +53,17 @@ functions the change touches, and one similar existing feature to copy conventio
 8 paths, one per line, exactly as written in the map. No commentary.";
 
 const EDIT_SYSTEM: &str = "You are a code editor. Follow the plan and the user's request. \
-For every change output exactly this format:\n\
+For every change output exactly this format, and nothing else:\n\
 FILE: <relative path>\n\
 <<<<<<< SEARCH\n\
 <existing lines, copied exactly from the file>\n\
 =======\n\
 <new lines>\n\
 >>>>>>> REPLACE\n\
-Rules: SEARCH must match the file exactly (including indentation) and be unique in the file. \
-Keep blocks small. Use an empty REPLACE section to delete lines. Output only these blocks, no prose.";
+Rules: start every block with a plain line `FILE: path` (no bold, no backticks, no code fences \
+around the output). SEARCH must match the file exactly (including indentation) and be unique in \
+the file. Keep blocks small: change only a few lines each, never the whole file. Use an empty \
+REPLACE section to delete lines. Output only these blocks, no prose.";
 
 /// One search/replace block proposed by the model.
 #[derive(Debug, Clone)]
@@ -120,9 +122,12 @@ pub fn classify(text: &str, has_project: bool) -> Intent {
 }
 
 /// Parse `FILE:` + SEARCH/REPLACE blocks out of the executor's reply.
-pub fn parse_edits(reply: &str) -> Vec<Proposal> {
+/// Tolerant of markdown decoration (`**FILE:**`, backticks, `File:`), code fences
+/// around the output, and bare file paths. `default_file` is used when the model
+/// never names a file.
+pub fn parse_edits(reply: &str, known: &[String], default_file: Option<&str>) -> Vec<Proposal> {
     let mut out = Vec::new();
-    let mut file = String::new();
+    let mut file = default_file.map(str::to_string).unwrap_or_default();
     let mut mode = 0; // 0 = outside, 1 = in SEARCH, 2 = in REPLACE
     let mut search: Vec<&str> = Vec::new();
     let mut replace: Vec<&str> = Vec::new();
@@ -131,15 +136,12 @@ pub fn parse_edits(reply: &str) -> Vec<Proposal> {
         let t = line.trim();
         match mode {
             0 => {
-                if let Some(f) = t.strip_prefix("FILE:") {
-                    file = f
-                        .trim()
-                        .trim_matches('`')
-                        .trim_matches('*')
-                        .trim()
-                        .to_string();
-                } else if t.starts_with("<<<<<<<") {
+                if t.starts_with("<<<<<<<") {
+                    search.clear();
+                    replace.clear();
                     mode = 1;
+                } else if let Some(f) = file_from_line(t, known) {
+                    file = f;
                 }
             }
             1 => {
@@ -168,6 +170,28 @@ pub fn parse_edits(reply: &str) -> Vec<Proposal> {
         }
     }
     out
+}
+
+/// A line that names a file: `FILE: x`, `**FILE:** x`, `### File: x`, or a bare known path.
+fn file_from_line(t: &str, known: &[String]) -> Option<String> {
+    let cleaned = t.trim_start_matches('#').replace(['*', '`'], "");
+    let cleaned = cleaned.trim();
+    let explicit = cleaned.to_lowercase().starts_with("file:");
+    let candidate = if explicit { cleaned.get(5..)?.trim() } else { cleaned };
+    let candidate = candidate
+        .trim_matches(|c| c == '"' || c == '\'' || c == ':')
+        .trim();
+    if candidate.is_empty() {
+        return None;
+    }
+    if let Some(k) = known.iter().find(|k| k.as_str() == candidate) {
+        return Some(k.clone());
+    }
+    let suffix = format!("/{candidate}");
+    if let Some(k) = known.iter().find(|k| k.ends_with(&suffix)) {
+        return Some(k.clone());
+    }
+    explicit.then(|| candidate.to_string())
 }
 
 /// Everything captured when the user hits Send, kept until the executor starts.
@@ -364,7 +388,13 @@ fn append_instructions(system: &mut String, instructions: &str) {
 
 fn append_project(system: &mut String, project: &str) {
     if !project.trim().is_empty() {
-        system.push_str("\n\n# Project (the user's open folder)\n");
+        system.push_str(
+            "\n\n# Project (the user's open folder)\n\
+             You CAN see this project. Below is its file tree. File contents appear \
+             under '## File contents' only for files the user attached or @mentioned. \
+             If you need a file that is not shown, ask the user to attach it or \
+             @mention it by path. Never say you cannot access the project.\n\n",
+        );
         system.push_str(project);
     }
 }

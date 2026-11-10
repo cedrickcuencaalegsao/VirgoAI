@@ -1,4 +1,5 @@
-//! Virgo AI look and feel: one custom dark theme plus small style helpers.
+//! Virgo AI look and feel: deep navy surfaces, one gold accent.
+//! Palette: #14213D navy, #FCA311 gold, #E5E5E5 text.
 
 use iced::font::Weight;
 use iced::theme::Palette;
@@ -6,25 +7,49 @@ use iced::widget::{button, container, pick_list, text, text_input};
 use iced::{Background, Border, Color, Font, Shadow, Theme};
 
 // ---------------------------------------------------------------------------
-// Theme
+// Colours
 // ---------------------------------------------------------------------------
+
+pub fn bg() -> Color {
+    Color::from_rgb8(0x0B, 0x13, 0x24)
+}
+pub fn sidebar_bg() -> Color {
+    Color::from_rgb8(0x0F, 0x1A, 0x33)
+}
+pub fn surface() -> Color {
+    Color::from_rgb8(0x14, 0x21, 0x3D)
+}
+pub fn gold() -> Color {
+    Color::from_rgb8(0xFC, 0xA3, 0x11)
+}
+pub fn gold_hi() -> Color {
+    Color::from_rgb8(0xFF, 0xB8, 0x3A)
+}
+/// Text colour on gold surfaces.
+pub fn on_gold() -> Color {
+    bg()
+}
+
+fn alpha(color: Color, a: f32) -> Color {
+    Color { a, ..color }
+}
+
+fn line() -> Color {
+    alpha(Color::WHITE, 0.07)
+}
 
 pub fn palette() -> Palette {
     Palette {
-        background: Color::from_rgb8(0x0E, 0x10, 0x16),
-        text: Color::from_rgb8(0xE8, 0xEA, 0xF0),
-        primary: Color::from_rgb8(0x8B, 0x7C, 0xFF), // soft violet
-        success: Color::from_rgb8(0x4A, 0xDE, 0x9B),
-        danger: Color::from_rgb8(0xFF, 0x6B, 0x6B),
+        background: bg(),
+        text: Color::from_rgb8(0xE5, 0xE5, 0xE5),
+        primary: gold(),
+        success: Color::from_rgb8(0x5F, 0xD3, 0xA4),
+        danger: Color::from_rgb8(0xF0, 0x62, 0x6A),
     }
 }
 
 pub fn theme() -> Theme {
     Theme::custom("Virgo".to_string(), palette())
-}
-
-fn alpha(color: Color, a: f32) -> Color {
-    Color { a, ..color }
 }
 
 pub fn bold() -> Font {
@@ -37,20 +62,18 @@ pub fn bold() -> Font {
 
 /// Secondary, lower-contrast text.
 pub fn dim(theme: &Theme) -> text::Style {
-    text::Style { color: Some(alpha(theme.palette().text, 0.6)) }
+    text::Style { color: Some(alpha(theme.palette().text, 0.62)) }
 }
 
-/// Green text (AI changes).
 pub fn success(theme: &Theme) -> text::Style {
     text::Style { color: Some(theme.palette().success) }
 }
 
-/// Red text (removed lines).
 pub fn danger_text(theme: &Theme) -> text::Style {
     text::Style { color: Some(theme.palette().danger) }
 }
 
-/// Brand colour text.
+/// Brand colour text (gold).
 pub fn accent(theme: &Theme) -> text::Style {
     text::Style { color: Some(theme.palette().primary) }
 }
@@ -59,7 +82,7 @@ pub fn accent(theme: &Theme) -> text::Style {
 // Containers
 // ---------------------------------------------------------------------------
 
-fn surface(bg: Color, border: Color, radius: f32) -> container::Style {
+fn surface_style(bg: Color, border: Color, radius: f32) -> container::Style {
     container::Style {
         background: Some(Background::Color(bg)),
         border: Border { color: border, width: 1.0, radius: radius.into() },
@@ -67,113 +90,71 @@ fn surface(bg: Color, border: Color, radius: f32) -> container::Style {
     }
 }
 
-pub fn sidebar(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
+pub fn sidebar(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(p.background.weak.color)),
+        background: Some(Background::Color(sidebar_bg())),
         ..container::Style::default()
     }
 }
 
-pub fn card(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
-    surface(
-        p.background.weak.color,
-        alpha(p.background.strong.color, 0.55),
-        16.0,
-    )
+pub fn card(_theme: &Theme) -> container::Style {
+    surface_style(surface(), line(), 16.0)
 }
 
-pub fn user_bubble(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
+pub fn user_bubble(_theme: &Theme) -> container::Style {
     container::Style {
-        text_color: Some(p.primary.base.text),
-        ..surface(p.primary.base.color, Color::TRANSPARENT, 16.0)
+        text_color: Some(on_gold()),
+        ..surface_style(gold(), Color::TRANSPARENT, 16.0)
     }
 }
 
-pub fn plan_card(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
-    surface(
-        alpha(p.primary.base.color, 0.07),
-        alpha(p.primary.base.color, 0.35),
-        16.0,
-    )
+pub fn plan_card(_theme: &Theme) -> container::Style {
+    surface_style(alpha(gold(), 0.06), alpha(gold(), 0.30), 16.0)
 }
 
 pub fn error_card(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
-    surface(
-        alpha(p.danger.base.color, 0.10),
-        alpha(p.danger.base.color, 0.50),
-        12.0,
-    )
+    let d = theme.palette().danger;
+    surface_style(alpha(d, 0.10), alpha(d, 0.50), 12.0)
 }
 
 /// The collapsible reasoning panel.
-pub fn thinking_box(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
-    surface(
-        p.background.base.color,
-        alpha(p.background.strong.color, 0.4),
-        10.0,
-    )
+pub fn thinking_box(_theme: &Theme) -> container::Style {
+    surface_style(bg(), line(), 10.0)
 }
 
 /// Fenced code blocks inside replies.
-pub fn code_block(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
-    surface(
-        p.background.base.color,
-        alpha(p.background.strong.color, 0.5),
-        10.0,
-    )
+pub fn code_block(_theme: &Theme) -> container::Style {
+    surface_style(bg(), line(), 10.0)
 }
 
 /// The scrolling code area.
-pub fn code_area(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
-    surface(
-        p.background.base.color,
-        alpha(p.background.strong.color, 0.5),
-        12.0,
-    )
+pub fn code_area(_theme: &Theme) -> container::Style {
+    surface_style(bg(), line(), 12.0)
 }
 
-/// Line added by the model: green.
 pub fn row_added(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
     container::Style {
-        background: Some(Background::Color(alpha(p.success.base.color, 0.16))),
+        background: Some(Background::Color(alpha(theme.palette().success, 0.15))),
         ..container::Style::default()
     }
 }
 
-/// Original line that the model replaced or deleted: red.
 pub fn row_removed(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
     container::Style {
-        background: Some(Background::Color(alpha(p.danger.base.color, 0.13))),
+        background: Some(Background::Color(alpha(theme.palette().danger, 0.14))),
         ..container::Style::default()
     }
 }
 
-/// The line the suggestion bar is working on.
-pub fn row_selected(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
+pub fn row_selected(_theme: &Theme) -> container::Style {
     container::Style {
-        background: Some(Background::Color(alpha(p.primary.base.color, 0.14))),
+        background: Some(Background::Color(alpha(gold(), 0.13))),
         ..container::Style::default()
     }
 }
 
-pub fn composer(theme: &Theme) -> container::Style {
-    let p = theme.extended_palette();
-    surface(
-        p.background.weak.color,
-        alpha(p.primary.base.color, 0.45),
-        18.0,
-    )
+pub fn composer(_theme: &Theme) -> container::Style {
+    surface_style(surface(), alpha(gold(), 0.40), 18.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -183,16 +164,14 @@ pub fn composer(theme: &Theme) -> container::Style {
 /// Sidebar navigation and list items.
 pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |theme: &Theme, status: button::Status| {
-        let p = theme.extended_palette();
         let text_color = theme.palette().text;
-        let primary = p.primary.base.color;
 
         let (background, color) = match (active, status) {
-            (true, _) => (Some(alpha(primary, 0.18)), primary),
+            (true, _) => (Some(alpha(gold(), 0.14)), gold()),
             (false, button::Status::Hovered | button::Status::Pressed) => {
-                (Some(alpha(p.background.strong.color, 0.5)), text_color)
+                (Some(alpha(Color::WHITE, 0.06)), text_color)
             }
-            _ => (None, alpha(text_color, 0.75)),
+            _ => (None, alpha(text_color, 0.78)),
         };
 
         button::Style {
@@ -204,17 +183,11 @@ pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
     }
 }
 
-pub fn primary_button(theme: &Theme, status: button::Status) -> button::Style {
-    let p = theme.extended_palette();
+pub fn primary_button(_theme: &Theme, status: button::Status) -> button::Style {
     let (background, text_color) = match status {
-        button::Status::Active => (p.primary.base.color, p.primary.base.text),
-        button::Status::Hovered | button::Status::Pressed => {
-            (p.primary.strong.color, p.primary.strong.text)
-        }
-        button::Status::Disabled => (
-            alpha(p.primary.base.color, 0.35),
-            alpha(p.primary.base.text, 0.6),
-        ),
+        button::Status::Active => (gold(), on_gold()),
+        button::Status::Hovered | button::Status::Pressed => (gold_hi(), on_gold()),
+        button::Status::Disabled => (alpha(gold(), 0.30), alpha(Color::WHITE, 0.45)),
     };
 
     button::Style {
@@ -248,15 +221,14 @@ pub fn danger_button(theme: &Theme, status: button::Status) -> button::Style {
 
 /// Quiet button for secondary actions.
 pub fn ghost_button(theme: &Theme, status: button::Status) -> button::Style {
-    let p = theme.extended_palette();
     let text_color = theme.palette().text;
 
     let (background, color) = match status {
         button::Status::Hovered | button::Status::Pressed => {
-            (Some(alpha(p.background.strong.color, 0.5)), text_color)
+            (Some(alpha(Color::WHITE, 0.07)), text_color)
         }
         button::Status::Disabled => (None, alpha(text_color, 0.3)),
-        button::Status::Active => (None, alpha(text_color, 0.7)),
+        button::Status::Active => (None, alpha(text_color, 0.72)),
     };
 
     button::Style {
@@ -269,17 +241,15 @@ pub fn ghost_button(theme: &Theme, status: button::Status) -> button::Style {
 
 /// Small pill for attached files above the composer.
 pub fn chip(theme: &Theme, status: button::Status) -> button::Style {
-    let p = theme.extended_palette();
-    let primary = p.primary.base.color;
     let background = match status {
-        button::Status::Hovered | button::Status::Pressed => alpha(primary, 0.28),
-        _ => alpha(primary, 0.15),
+        button::Status::Hovered | button::Status::Pressed => alpha(gold(), 0.24),
+        _ => alpha(gold(), 0.12),
     };
 
     button::Style {
         background: Some(Background::Color(background)),
         text_color: theme.palette().text,
-        border: Border { color: alpha(primary, 0.4), width: 1.0, radius: 12.0.into() },
+        border: Border { color: alpha(gold(), 0.40), width: 1.0, radius: 12.0.into() },
         shadow: Shadow::default(),
     }
 }
@@ -298,12 +268,22 @@ pub fn composer_input(theme: &Theme, status: text_input::Status) -> text_input::
 
 pub fn field(theme: &Theme, status: text_input::Status) -> text_input::Style {
     let mut style = text_input::default(theme, status);
-    style.border.radius = 10.0.into();
+    style.background = Background::Color(bg());
+    let border = match status {
+        text_input::Status::Focused => gold(),
+        _ => alpha(Color::WHITE, 0.10),
+    };
+    style.border = Border { color: border, width: 1.0, radius: 10.0.into() };
     style
 }
 
 pub fn pick(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
     let mut style = pick_list::default(theme, status);
-    style.border.radius = 10.0.into();
+    style.background = Background::Color(bg());
+    style.border = Border {
+        color: alpha(Color::WHITE, 0.10),
+        width: 1.0,
+        radius: 10.0.into(),
+    };
     style
 }

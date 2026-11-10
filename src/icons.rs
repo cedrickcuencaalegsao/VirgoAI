@@ -60,7 +60,7 @@ pub fn accent() -> Color {
 
 /// Text colour on primary (violet) buttons.
 pub fn on_primary() -> Color {
-    style::theme().extended_palette().primary.base.text
+    style::on_gold()
 }
 
 /// Text colour on danger (red) buttons.

@@ -52,9 +52,13 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
         icons::tint(icons::file_text(), 18.0, icons::accent()),
         column![
             text(name).size(15).font(style::bold()),
-            text(if dir.is_empty() { "(project root)" } else { dir })
-                .size(11)
-                .style(style::dim),
+            text(if dir.is_empty() {
+                "(project root)"
+            } else {
+                dir
+            })
+            .size(11)
+            .style(style::dim),
         ]
         .spacing(1),
         horizontal_space(),
@@ -79,12 +83,16 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
     };
 
     let toolbar = row![
-        summary,
-        horizontal_space(),
-        button(icons::label(icons::undo_2(), "Undo apply", 12, icons::muted()))
-            .padding([6, 10])
-            .on_press_maybe(doc.previous.is_some().then_some(Message::UndoApply))
-            .style(style::ghost_button),
+        container(summary).width(Length::Fill),
+        button(icons::label(
+            icons::undo_2(),
+            "Undo apply",
+            12,
+            icons::muted()
+        ))
+        .padding([6, 10])
+        .on_press_maybe(doc.previous.is_some().then_some(Message::UndoApply))
+        .style(style::ghost_button),
         button(text("Discard").size(12))
             .padding([6, 10])
             .on_press_maybe((pending > 0).then_some(Message::DiscardEdits))
@@ -173,7 +181,11 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
 
     // Suggest (bulb) on every line; revert on lines that have a pending change.
     let actions: Element<'a, Message> = if r.show_actions {
-        let bulb_color = if selected { icons::accent() } else { icons::muted() };
+        let bulb_color = if selected {
+            icons::accent()
+        } else {
+            icons::muted()
+        };
         let mut buttons = row![button(icons::tint(icons::lightbulb(), 13.0, bulb_color))
             .padding([5, 6])
             .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
@@ -220,7 +232,9 @@ fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message
 
     let top = row![
         icons::tint(icons::lightbulb(), 15.0, icons::accent()),
-        text(format!("Line {}", line + 1)).size(13).font(style::bold()),
+        text(format!("Line {}", line + 1))
+            .size(13)
+            .font(style::bold()),
         text(short(current.trim(), 48))
             .size(12)
             .font(Font::MONOSPACE)
@@ -231,7 +245,11 @@ fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message
     .spacing(8)
     .align_y(Vertical::Center);
 
-    let action_label = if waiting { "Asking model..." } else { "Suggest" };
+    let action_label = if waiting {
+        "Asking model..."
+    } else {
+        "Suggest"
+    };
     let input = row![
         text_input(
             "How should this line change? (empty = improve it)",

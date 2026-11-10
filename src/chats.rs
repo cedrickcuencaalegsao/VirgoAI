@@ -14,7 +14,7 @@ use crate::config::app_dir;
 pub struct Chat {
     pub id: String,
     pub title: String,
-    pub updated: u64,          // keep whatever type you already have
+    pub updated: u64, // keep whatever type you already have
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub project: Option<String>,
@@ -26,6 +26,7 @@ pub struct ChatSummary {
     pub id: String,
     pub title: String,
     pub updated: u64,
+    pub project: Option<String>,
 }
 
 /// Only the fields needed for listing, so message bodies are skipped.
@@ -35,6 +36,8 @@ struct Header {
     title: String,
     #[serde(default)]
     updated: u64,
+    #[serde(default)]
+    project: Option<String>,
 }
 
 pub fn dir() -> PathBuf {
@@ -83,7 +86,10 @@ fn path_for(id: &str) -> io::Result<PathBuf> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if !valid {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid chat id"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid chat id",
+        ));
     }
     Ok(dir().join(format!("{id}.json")))
 }
@@ -125,10 +131,33 @@ pub fn list() -> Vec<ChatSummary> {
                 id: header.id,
                 title: header.title,
                 updated: header.updated,
+                project: header.project,
             })
         })
         .collect();
 
     chats.sort_by(|a, b| b.updated.cmp(&a.updated));
     chats
+}
+/// Detach every conversation from a project (used when the project is deleted).
+pub fn detach_project(slug: &str) {
+    let Ok(entries) = fs::read_dir(dir()) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.extension().is_some_and(|x| x == "json") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(mut chat) = serde_json::from_str::<Chat>(&text) else {
+            continue;
+        };
+        if chat.project.as_deref() == Some(slug) {
+            chat.project = None;
+            let _ = save(&chat);
+        }
+    }
 }

@@ -177,6 +177,8 @@ pub struct Pending {
     pub history: Vec<ChatMsg>,
     pub project: String,
     pub intent: Intent,
+    /// Instructions of the active project (empty = none).
+    pub instructions: String,
 }
 
 /// Recent user/assistant turns, newest last. Plans and errors are left out.
@@ -203,6 +205,7 @@ pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
     if pending.intent == Intent::Change {
         system.push_str(PLANNER_CHANGE_SUFFIX);
     }
+    append_instructions(&mut system, &pending.instructions); // <- new
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
 
@@ -229,6 +232,7 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         EXECUTOR_SYSTEM
     };
     let mut system = String::from(base);
+    append_instructions(&mut system, &pending.instructions); // <- new
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
     if let Some(plan) = plan {
@@ -351,6 +355,13 @@ fn append_memory(system: &mut String, memory: &str) {
     }
 }
 
+fn append_instructions(system: &mut String, instructions: &str) {
+    if !instructions.trim().is_empty() {
+        system.push_str("\n\n# Project instructions (always follow these)\n");
+        system.push_str(instructions.trim());
+    }
+}
+
 fn append_project(system: &mut String, project: &str) {
     if !project.trim().is_empty() {
         system.push_str("\n\n# Project (the user's open folder)\n");
@@ -390,7 +401,9 @@ pub fn scout_request(cfg: &Config, pending: &Pending) -> ChatRequest {
         messages: vec![ChatMsg::system(SCOUT_SYSTEM), ChatMsg::user(user)],
         stream: false,
         think: Some(false), // a path list needs no long reasoning
-        options: Options { num_ctx: cfg.num_ctx },
+        options: Options {
+            num_ctx: cfg.num_ctx,
+        },
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -400,7 +413,9 @@ pub fn parse_scout(reply: &str) -> Vec<String> {
     strip_think_tags(reply)
         .lines()
         .map(|l| {
-            let mut s = l.trim().trim_start_matches(|c| c == '-' || c == '*' || c == ' ');
+            let mut s = l
+                .trim()
+                .trim_start_matches(|c| c == '-' || c == '*' || c == ' ');
             if let Some((n, rest)) = s.split_once(". ") {
                 if n.chars().all(|c| c.is_ascii_digit()) {
                     s = rest;

@@ -1,7 +1,7 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
     button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
-    text_editor, text_input,
+    text_editor, text_input, Space,
 };
 use iced::{Element, Length, Theme};
 
@@ -64,6 +64,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
         icons::muted()
     };
 
+    let back: Element<'_, Message> = match app.chat_workspace() {
+        Some(slug) => button(icons::label(
+            icons::folder_kanban(),
+            "Project",
+            12,
+            icons::muted(),
+        ))
+        .padding([7, 12])
+        .on_press(Message::OpenWorkspace(slug))
+        .style(style::ghost_button)
+        .into(),
+        None => Space::new(Length::Shrink, Length::Shrink).into(),
+    };
+
     let header = row![
         column![
             text("Conversation").size(22).font(style::bold()),
@@ -71,6 +85,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         ]
         .spacing(2),
         horizontal_space(),
+        back,
         pickers,
         button(icons::label(
             icons::refresh_cw(),

@@ -22,6 +22,7 @@ use crate::workspaces::{self, Workspace};
 pub enum Screen {
     Chat,
     Projects,
+    Project,
     Memory,
     Settings,
 }
@@ -107,15 +108,21 @@ pub enum Message {
     // Projects
     NewWorkspaceNameChanged(String),
     CreateWorkspace,
-    SelectWorkspace(String),
+    OpenWorkspace(String),
     DeleteWorkspace(String),
-    ActivateWorkspace(Option<String>),
+    ProjectInputChanged(String),
+    ProjectSend,
+    InstructionsAction(text_editor::Action),
+    SaveInstructions,
     SelectWorkspaceNote(String),
+    CloseWorkspaceNote,
     WorkspaceEditorAction(text_editor::Action),
     SaveWorkspaceNote,
     DeleteWorkspaceNote,
-    /// Chat id taken from a project note's file name.
-    OpenWorkspaceChat(String),
+    KnowledgeNameChanged(String),
+    CreateKnowledge,
+    LinkFolder,
+    OpenLinkedFolder,
 
     // Settings
     SettingsUrlChanged(String),
@@ -200,15 +207,21 @@ pub struct App {
 
     // Projects
     pub workspaces: Vec<Workspace>,
-    /// Project that new chats are saved into.
-    pub active_workspace: Option<String>,
     /// Project of the conversation on screen (fixed when the chat is first saved).
     chat_project: Option<String>,
     pub new_workspace_name: String,
+    /// The project whose home screen is open.
     pub selected_workspace: Option<String>,
+    /// Project waiting for a second click on delete.
+    pub confirm_delete: Option<String>,
+    pub project_input: String,
+    pub instructions_editor: text_editor::Content,
+    pub linked_folder: Option<String>,
+    /// Knowledge note names of the open project.
     pub workspace_notes: Vec<String>,
     pub selected_ws_note: Option<String>,
     pub ws_editor: text_editor::Content,
+    pub new_knowledge_name: String,
 }
 
 impl App {
@@ -227,8 +240,6 @@ impl App {
             Project::scan(PathBuf::from(&cfg.last_project)).ok()
         };
         let workspace_list = workspaces::list();
-        let active_workspace = Some(cfg.active_workspace.clone())
-            .filter(|s| workspace_list.iter().any(|w| &w.slug == s));
 
         let app = App {
             cfg,
@@ -271,13 +282,17 @@ impl App {
             scout_must: Vec::new(),
             scout_files: Vec::new(),
             workspaces: workspace_list,
-            active_workspace,
             chat_project: None,
             new_workspace_name: String::new(),
             selected_workspace: None,
+            confirm_delete: None,
+            project_input: String::new(),
+            instructions_editor: text_editor::Content::new(),
+            linked_folder: None,
             workspace_notes: Vec::new(),
             selected_ws_note: None,
             ws_editor: text_editor::Content::new(),
+            new_knowledge_name: String::new(),
         };
 
         let task = Task::perform(client::list_models(url), Message::ModelsLoaded);
@@ -339,6 +354,7 @@ impl App {
                 if !self.is_busy() {
                     self.messages.clear();
                     self.current_chat = None;
+                    self.chat_project = None;
                     self.status = "New chat".into();
                 }
                 self.screen = Screen::Chat;
@@ -534,11 +550,21 @@ impl App {
                     .map(|m| m.content.trim().to_string());
                 if let Some(reply) = reply {
                     let entry = format!("\n## {}\n{}\n", store::today(), reply);
-                    self.status = match self.store.append("inbox.md", &entry) {
-                        Ok(_) => "Saved the last reply to inbox.md".into(),
-                        Err(e) => format!("Could not save: {e}"),
+                    self.status = match self.chat_workspace() {
+                        Some(slug) => match workspaces::append_memory(&slug, &entry) {
+                            Ok(_) => format!(
+                                "Saved the last reply to the memory of project \"{}\"",
+                                self.workspace_name(&slug)
+                            ),
+                            Err(e) => format!("Could not save: {e}"),
+                        },
+                        None => match self.store.append("inbox.md", &entry) {
+                            Ok(_) => "Saved the last reply to inbox.md".into(),
+                            Err(e) => format!("Could not save: {e}"),
+                        },
                     };
                     self.refresh_notes();
+                    self.refresh_workspace_notes();
                 }
                 Task::none()
             }
@@ -663,20 +689,34 @@ impl App {
                 self.create_workspace();
                 Task::none()
             }
-            Message::SelectWorkspace(slug) => {
-                self.select_workspace(slug);
+            Message::OpenWorkspace(slug) => {
+                self.open_workspace(slug);
                 Task::none()
             }
             Message::DeleteWorkspace(slug) => {
                 self.delete_workspace(slug);
                 Task::none()
             }
-            Message::ActivateWorkspace(slug) => {
-                self.activate_workspace(slug);
+            Message::ProjectInputChanged(value) => {
+                self.project_input = value;
+                Task::none()
+            }
+            Message::ProjectSend => self.start_project_chat(),
+            Message::InstructionsAction(action) => {
+                self.instructions_editor.perform(action);
+                Task::none()
+            }
+            Message::SaveInstructions => {
+                self.save_instructions();
                 Task::none()
             }
             Message::SelectWorkspaceNote(name) => {
                 self.select_workspace_note(name);
+                Task::none()
+            }
+            Message::CloseWorkspaceNote => {
+                self.selected_ws_note = None;
+                self.ws_editor = text_editor::Content::new();
                 Task::none()
             }
             Message::WorkspaceEditorAction(action) => {
@@ -691,7 +731,24 @@ impl App {
                 self.delete_workspace_note();
                 Task::none()
             }
-            Message::OpenWorkspaceChat(id) => self.open_chat(id),
+            Message::KnowledgeNameChanged(value) => {
+                self.new_knowledge_name = value;
+                Task::none()
+            }
+            Message::CreateKnowledge => {
+                self.create_knowledge();
+                Task::none()
+            }
+            Message::LinkFolder => {
+                self.link_folder();
+                Task::none()
+            }
+            Message::OpenLinkedFolder => {
+                if let Some(path) = self.linked_folder.clone() {
+                    self.open_project(expand_home(&path));
+                }
+                Task::none()
+            }
         }
     }
 
@@ -722,8 +779,10 @@ impl App {
         // Gather context BEFORE adding the new message to the history.
         let history = pipeline::history_from(&self.messages);
         let mut notes = self.store.load_all();
+        let mut instructions = String::new();
         if let Some(slug) = self.chat_workspace() {
-            notes.extend(workspaces::load_notes(&slug, self.current_chat.as_deref()));
+            instructions = workspaces::instructions(&slug);
+            notes.extend(workspaces::load_notes(&slug));
         }
         let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
         let memory = retrieval::build_context(&notes, &text, budget_chars);
@@ -743,6 +802,7 @@ impl App {
             history,
             project,
             intent: self.intent,
+            instructions,
         };
 
         if self.intent == Intent::Change {
@@ -1100,6 +1160,14 @@ impl App {
                 self.show_panel = true;
                 self.cfg.last_project = path.to_string_lossy().to_string();
                 self.persist();
+                if let Some(slug) = self.link_target() {
+                    let linked = path.to_string_lossy().to_string();
+                    if workspaces::link_folder(&slug, &linked).is_ok()
+                        && self.selected_workspace.as_deref() == Some(slug.as_str())
+                    {
+                        self.linked_folder = Some(linked);
+                    }
+                }
             }
             Err(e) => self.status = format!("Could not open folder: {e}"),
         }
@@ -1208,10 +1276,6 @@ impl App {
             return;
         }
 
-        // A chat belongs to the project that was active when it was first saved.
-        if self.current_chat.is_none() {
-            self.chat_project = self.active_workspace.clone();
-        }
         let id = self.current_chat.get_or_insert_with(chats::new_id).clone();
         let chat = Chat {
             id,
@@ -1251,6 +1315,9 @@ impl App {
                 self.current_chat = Some(chat.id);
                 self.pending = None;
                 self.screen = Screen::Chat;
+                if let Some(slug) = self.chat_project.clone() {
+                    self.sync_folder(&slug);
+                }
                 self.status = format!("Opened \"{}\"", chat.title);
                 scroll_to_end()
             }
@@ -1465,7 +1532,7 @@ impl App {
             }
             Screen::Memory => ui::memory::view(self),
             Screen::Settings => ui::settings::view(self),
-            Screen::Projects => ui::workspaces::view(self),
+            Screen::Projects | Screen::Project => ui::workspaces::view(self),
         };
 
         let footer = text(self.status.as_str()).size(12).style(ui::style::dim);
@@ -1627,15 +1694,12 @@ impl App {
             ctx.text
         );
     }
-        // ---- projects ---------------------------------------------------------
 
-    /// Project the conversation on screen is saved into (and recalled from).
+    // ---- projects ---------------------------------------------------------
+
+    /// Project of the conversation on screen (None = general chat).
     pub fn chat_workspace(&self) -> Option<String> {
-        if self.current_chat.is_some() {
-            self.chat_project.clone()
-        } else {
-            self.active_workspace.clone()
-        }
+        self.chat_project.clone()
     }
 
     pub fn workspace_name(&self, slug: &str) -> String {
@@ -1644,10 +1708,6 @@ impl App {
             .find(|w| w.slug == slug)
             .map(|w| w.name.clone())
             .unwrap_or_else(|| slug.to_string())
-    }
-
-    pub fn active_workspace_name(&self) -> Option<String> {
-        self.active_workspace.as_deref().map(|s| self.workspace_name(s))
     }
 
     pub fn chat_workspace_name(&self) -> Option<String> {
@@ -1659,18 +1719,56 @@ impl App {
             Ok(slug) => {
                 self.new_workspace_name.clear();
                 self.workspaces = workspaces::list();
-                self.select_workspace(slug.clone());
-                self.activate_workspace(Some(slug));
+                self.open_workspace(slug);
             }
             Err(e) => self.status = format!("Could not create project: {e}"),
         }
     }
 
-    fn select_workspace(&mut self, slug: String) {
-        self.selected_workspace = Some(slug);
-        self.selected_ws_note = None;
-        self.ws_editor = text_editor::Content::new();
+    /// Open the project home screen. Re-opening the same project keeps unsaved editor text.
+    fn open_workspace(&mut self, slug: String) {
+        if !workspaces::exists(&slug) {
+            self.status = "That project no longer exists".into();
+            self.workspaces = workspaces::list();
+            return;
+        }
+        self.confirm_delete = None;
+        let same = self.selected_workspace.as_deref() == Some(slug.as_str());
+        if !same {
+            self.selected_workspace = Some(slug.clone());
+            self.selected_ws_note = None;
+            self.ws_editor = text_editor::Content::new();
+            self.instructions_editor =
+                text_editor::Content::with_text(&workspaces::instructions(&slug));
+            self.linked_folder = workspaces::linked_folder(&slug);
+            self.project_input.clear();
+            self.new_knowledge_name.clear();
+        }
+        self.screen = Screen::Project;
+        self.sync_folder(&slug);
         self.refresh_workspace_notes();
+        self.status = format!("Project \"{}\"", self.workspace_name(&slug));
+    }
+
+    /// Start a conversation inside the open project from its home composer.
+    fn start_project_chat(&mut self) -> Task<Message> {
+        if self.is_busy() {
+            return Task::none();
+        }
+        let Some(slug) = self.selected_workspace.clone() else {
+            return Task::none();
+        };
+        let text = self.project_input.trim().to_string();
+        if text.is_empty() {
+            return Task::none();
+        }
+        self.messages.clear();
+        self.current_chat = None;
+        self.chat_project = Some(slug);
+        self.project_input.clear();
+        self.input = text;
+        self.screen = Screen::Chat;
+        self.send()
     }
 
     fn refresh_workspace_notes(&mut self) {
@@ -1681,38 +1779,106 @@ impl App {
             .unwrap_or_default();
     }
 
-    fn activate_workspace(&mut self, slug: Option<String>) {
-        let slug = slug.filter(|s| workspaces::exists(s));
-        self.cfg.active_workspace = slug.clone().unwrap_or_default();
-        self.persist();
-        self.status = match &slug {
-            Some(s) => format!("New chats are saved to project \"{}\"", self.workspace_name(s)),
-            None => "No active project: new chats are not saved as project memory".into(),
+    fn save_instructions(&mut self) {
+        let Some(slug) = self.selected_workspace.clone() else {
+            return;
         };
-        self.active_workspace = slug;
+        self.status = match workspaces::save_instructions(&slug, &self.instructions_editor.text()) {
+            Ok(()) => "Saved project instructions".into(),
+            Err(e) => format!("Could not save instructions: {e}"),
+        };
     }
 
+    fn link_folder(&mut self) {
+        let Some(slug) = self.selected_workspace.clone() else {
+            return;
+        };
+        let Some(path) = self
+            .project
+            .as_ref()
+            .map(|p| p.root.to_string_lossy().to_string())
+        else {
+            return;
+        };
+        self.status = match workspaces::link_folder(&slug, &path) {
+            Ok(()) => {
+                self.linked_folder = Some(path);
+                "Linked the open folder to this project".into()
+            }
+            Err(e) => format!("Could not link folder: {e}"),
+        };
+    }
+
+    /// Two-step delete. The project's conversations are kept as general chats.
     fn delete_workspace(&mut self, slug: String) {
+        if self.is_busy() && self.chat_project.as_deref() == Some(slug.as_str()) {
+            self.status = "Stop the running conversation first".into();
+            return;
+        }
+        if self.confirm_delete.as_deref() != Some(slug.as_str()) {
+            self.status = format!(
+                "Click again to delete \"{}\". Its conversations stay as general chats.",
+                self.workspace_name(&slug)
+            );
+            self.confirm_delete = Some(slug);
+            return;
+        }
+        self.confirm_delete = None;
+
         if let Err(e) = workspaces::delete(&slug) {
             self.status = format!("Could not delete project: {e}");
             return;
         }
+        chats::detach_project(&slug);
+        self.chats = chats::list();
+
         if self.selected_workspace.as_deref() == Some(slug.as_str()) {
             self.selected_workspace = None;
             self.selected_ws_note = None;
             self.workspace_notes.clear();
+            self.linked_folder = None;
+            self.instructions_editor = text_editor::Content::new();
             self.ws_editor = text_editor::Content::new();
-        }
-        if self.active_workspace.as_deref() == Some(slug.as_str()) {
-            self.active_workspace = None;
-            self.cfg.active_workspace.clear();
-            self.persist();
+            if self.screen == Screen::Project {
+                self.screen = Screen::Projects;
+            }
         }
         if self.chat_project.as_deref() == Some(slug.as_str()) {
             self.chat_project = None;
         }
         self.workspaces = workspaces::list();
-        self.status = "Project deleted".into();
+        self.status = "Project deleted. Its conversations are now general chats.".into();
+    }
+
+    fn create_knowledge(&mut self) {
+        let Some(slug) = self.selected_workspace.clone() else {
+            return;
+        };
+        let Some(name) = store::normalize_name(&self.new_knowledge_name) else {
+            self.status = "Enter a valid note name".into();
+            return;
+        };
+        // Bare names go into the project's memory/ folder.
+        let name = if name.contains('/') {
+            name
+        } else {
+            format!("memory/{name}")
+        };
+
+        let result = workspaces::store(&slug).and_then(|s| {
+            if !s.list().contains(&name) {
+                s.write(&name, "")?;
+            }
+            Ok(())
+        });
+        match result {
+            Ok(()) => {
+                self.new_knowledge_name.clear();
+                self.refresh_workspace_notes();
+                self.select_workspace_note(name);
+            }
+            Err(e) => self.status = format!("Could not create {name}: {e}"),
+        }
     }
 
     fn select_workspace_note(&mut self, name: String) {
@@ -1729,9 +1895,10 @@ impl App {
     }
 
     fn save_workspace_note(&mut self) {
-        let (Some(slug), Some(name)) =
-            (self.selected_workspace.clone(), self.selected_ws_note.clone())
-        else {
+        let (Some(slug), Some(name)) = (
+            self.selected_workspace.clone(),
+            self.selected_ws_note.clone(),
+        ) else {
             return;
         };
         let text = self.ws_editor.text();
@@ -1739,19 +1906,20 @@ impl App {
             Ok(_) => format!("Saved {name}"),
             Err(e) => format!("Could not save {name}: {e}"),
         };
-        if name == "project.md" {
-            // The project's display name comes from its first heading.
+        if name == workspaces::PROJECT_NOTE {
+            // The project's display name comes from the first heading of project.md.
             self.workspaces = workspaces::list();
         }
     }
 
     fn delete_workspace_note(&mut self) {
-        let (Some(slug), Some(name)) =
-            (self.selected_workspace.clone(), self.selected_ws_note.clone())
-        else {
+        let (Some(slug), Some(name)) = (
+            self.selected_workspace.clone(),
+            self.selected_ws_note.clone(),
+        ) else {
             return;
         };
-        if name == "project.md" {
+        if name == workspaces::PROJECT_NOTE {
             self.status = "project.md cannot be deleted".into();
             return;
         }
@@ -1762,6 +1930,29 @@ impl App {
         self.selected_ws_note = None;
         self.ws_editor = text_editor::Content::new();
         self.refresh_workspace_notes();
+    }
+    /// Which project a newly opened folder belongs to: the project of the chat on
+    /// screen, or the project whose home is open. None for general chats.
+    fn link_target(&self) -> Option<String> {
+        match self.screen {
+            Screen::Chat => self.chat_project.clone(),
+            Screen::Project => self.selected_workspace.clone(),
+            _ => None,
+        }
+    }
+
+    /// Open the project's linked folder unless it is already the open one.
+    fn sync_folder(&mut self, slug: &str) {
+        let Some(path) = workspaces::linked_folder(slug) else {
+            return;
+        };
+        let already = self
+            .project
+            .as_ref()
+            .is_some_and(|p| p.root.to_string_lossy() == path.as_str());
+        if !already {
+            self.open_project(expand_home(&path));
+        }
     }
 }
 

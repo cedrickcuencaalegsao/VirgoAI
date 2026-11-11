@@ -2266,6 +2266,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "memory"
+version = "0.1.0"
+dependencies = [
+ "walkdir",
+]
+
+[[package]]
 name = "metal"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3103,6 +3110,13 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "project"
+version = "0.1.0"
+dependencies = [
+ "walkdir",
+]
 
 [[package]]
 name = "quick-xml"
@@ -4551,7 +4565,9 @@ dependencies = [
  "config",
  "dirs 5.0.1",
  "iced",
+ "memory",
  "ollama",
+ "project",
  "rfd",
  "serde",
  "serde_json",

@@ -12,14 +12,14 @@ use crate::agent::pipeline::{self, Intent, Pending, Proposal};
 use crate::agent::{ChatMessage, Role};
 use crate::chats::{self, Chat, ChatSummary};
 use crate::code::CodeDoc;
-use crate::memory::retrieval;
-use crate::memory::store::{self, MemoryStore};
-use crate::project::Project;
 use crate::ui;
 use crate::workspaces::{self, Workspace};
 use config::Config;
+use memory::retrieval;
+use memory::store::{self, MemoryStore};
 use ollama::client;
 use ollama::types::{ChatRequest, StreamEvent};
+use project::Project;
 
 const MAX_AGENT_STEPS: u8 = 3;
 
@@ -821,10 +821,6 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Send => {
-                self.agent_steps = 0;
-                self.send()
-            }
             Message::ApplyAction(msg, idx) => {
                 self.apply_edits(msg, Some(idx));
                 Task::none()
@@ -1172,25 +1168,6 @@ impl App {
         self.status = error;
         self.save_chat();
         scroll_to_end()
-    }
-
-    /// The user pressed "Run plan": run the executor with the (edited) plan.
-    fn run_plan(&mut self) -> Task<Message> {
-        if !self.reviewing {
-            return Task::none();
-        }
-        let plan = self.plan_editor.text().trim().to_string();
-        self.reviewing = false;
-
-        if let Some(m) = self.messages.last_mut() {
-            if m.role == Role::Plan {
-                m.content = plan.clone();
-            }
-        }
-        self.prepare_executor_context(&plan);
-
-        let plan = if plan.is_empty() { None } else { Some(plan) };
-        self.start_executor(plan)
     }
 
     /// Open `file` in the code panel and stage its proposed edits as red/green rows.
@@ -1861,38 +1838,6 @@ impl App {
             }
         );
         self.spawn_stream(request)
-    }
-
-    /// The coder only needs the files the plan touches, not the whole map.
-    fn prepare_executor_context(&mut self, plan: &str) {
-        let budget = self.cfg.num_ctx as usize * 7 / 4;
-        let (Some(project), Some(pending)) = (self.project.as_ref(), self.pending.as_mut()) else {
-            return;
-        };
-
-        let mut files: Vec<String> = self.scout_must.clone();
-        for e in project
-            .entries
-            .iter()
-            .filter(|e| !e.is_dir && plan.contains(&e.rel))
-        {
-            if !files.contains(&e.rel) {
-                files.push(e.rel.clone());
-            }
-        }
-        for rel in &self.scout_files {
-            if !files.contains(rel) {
-                files.push(rel.clone());
-            }
-        }
-
-        let ctx = project.build_context(&files, budget);
-        pending.project = format!(
-            "Folder: {}\n\nFile tree:\n{}\n## Files (edit these)\n\n{}",
-            project.name,
-            project.tree_overview((budget / 4).min(3000)),
-            ctx.text
-        );
     }
 
     // ---- projects ---------------------------------------------------------

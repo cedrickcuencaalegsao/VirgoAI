@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::project::lang_for;
+use project::lang_for;
 
 /// Files bigger than this are not opened in the code panel.
 const MAX_BYTES: u64 = 1_000_000;

@@ -3,8 +3,6 @@ mod app;
 mod chats;
 mod code;
 mod icons;
-mod memory;
-mod project;
 mod terminal;
 mod ui;
 mod workspace;

@@ -2,14 +2,14 @@
 
 use iced::alignment::Vertical;
 use iced::widget::{
-    button, column, container, horizontal_space, row, scrollable, text, text_input, Space, Svg,
+    Space, Svg, button, column, container, horizontal_space, row, scrollable, text, text_input,
 };
 use iced::{Element, Length};
 
 use super::style;
 use crate::app::{App, Message};
 use crate::icons;
-use crate::project::{Entry, Project};
+use project::{Entry, Project};
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let body: Element<'_, Message> = match &app.project {
@@ -141,7 +141,11 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
     } else {
         let attached = app.attached.contains(&entry.rel);
         let open_here = app.code.as_ref().is_some_and(|doc| doc.rel == entry.rel);
-        let icon_color = if open_here { icons::accent() } else { icons::muted() };
+        let icon_color = if open_here {
+            icons::accent()
+        } else {
+            icons::muted()
+        };
 
         let content = row![
             indent,
@@ -153,8 +157,16 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
         .align_y(Vertical::Center);
 
         // Paperclip attaches the file to the chat; it turns into a check once attached.
-        let attach_icon = if attached { icons::check() } else { icons::paperclip() };
-        let attach_color = if attached { icons::accent() } else { icons::muted() };
+        let attach_icon = if attached {
+            icons::check()
+        } else {
+            icons::paperclip()
+        };
+        let attach_color = if attached {
+            icons::accent()
+        } else {
+            icons::muted()
+        };
 
         row![
             // Clicking the file opens it in the code panel.

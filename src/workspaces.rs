@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::agent::Role;
 use crate::chats::Chat;
-use crate::memory::store::{MemoryStore, Note, today};
+use memory::store::{MemoryStore, Note, today};
 use config::app_dir;
 
 pub const INSTRUCTIONS: &str = "instructions.md";

@@ -2736,6 +2736,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ollama"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4530,9 +4540,8 @@ name = "virgo-ai"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
- "futures",
  "iced",
- "reqwest",
+ "ollama",
  "rfd",
  "serde",
  "serde_json",

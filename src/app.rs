@@ -15,11 +15,11 @@ use crate::code::CodeDoc;
 use crate::config::Config;
 use crate::memory::retrieval;
 use crate::memory::store::{self, MemoryStore};
-use crate::ollama::client;
-use crate::ollama::types::{ChatRequest, StreamEvent};
 use crate::project::Project;
 use crate::ui;
 use crate::workspaces::{self, Workspace};
+use ollama::client;
+use ollama::types::{ChatRequest, StreamEvent};
 
 const MAX_AGENT_STEPS: u8 = 3;
 
@@ -888,7 +888,7 @@ impl App {
     // -----------------------------------------------------------------------
     // chat pipeline: planner stream -> executor stream
     // -----------------------------------------------------------------------
-       fn send(&mut self) -> Task<Message> {
+    fn send(&mut self) -> Task<Message> {
         let raw = self.input.trim().to_string();
         if raw.is_empty() || self.is_busy() {
             return Task::none();
@@ -961,7 +961,7 @@ impl App {
 
     /// Build the context, push the user message and start the planner or executor.
     /// Follow-up turns from command output call this with `use_planner = false`.
-        /// Send command output back to the model. Skips scouting, planning and review.
+    /// Send command output back to the model. Skips scouting, planning and review.
     fn follow_up(&mut self, text: String) -> Task<Message> {
         let history = pipeline::history_from(&self.messages);
         let mut notes = self.store.load_all();
@@ -1036,7 +1036,7 @@ impl App {
         }
     }
 
-        fn on_stage_done(&mut self) -> Task<Message> {
+    fn on_stage_done(&mut self) -> Task<Message> {
         self.abort = None;
         self.finish_thinking();
 

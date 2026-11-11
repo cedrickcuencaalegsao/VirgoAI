@@ -5,7 +5,6 @@ mod code;
 mod config;
 mod icons;
 mod memory;
-mod ollama;
 mod project;
 mod terminal;
 mod ui;

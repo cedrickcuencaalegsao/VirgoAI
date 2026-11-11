@@ -1,6 +1,6 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, column, container, horizontal_space, pick_list, row, scrollable, text,
+    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
     text_editor, text_input, Space,
 };
 use iced::{Element, Length, Theme};
@@ -134,6 +134,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // ---- composer ----
     let n = app.revertable();
     let remember = row![
+        checkbox("Edit mode (plan, review, then apply code)", app.edit_mode)
+            .on_toggle_maybe(
+                (app.project.is_some() && !app.is_busy()).then_some(Message::ToggleEditMode)
+            )
+            .size(16)
+            .text_size(12),
+        horizontal_space(),
         button(icons::label(
             icons::undo_2(),
             format!("Revert last AI edit ({n})"),

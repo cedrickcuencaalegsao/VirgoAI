@@ -1,7 +1,7 @@
 use super::{ChatMessage, Role};
 use crate::code::CodeDoc;
 use crate::config::Config;
-use crate::ollama::types::{ChatMsg, ChatRequest, Options};
+use ollama::types::{ChatMsg, ChatRequest, Options};
 
 /// How many earlier user/assistant messages are sent along as context.
 const HISTORY_LIMIT: usize = 10;

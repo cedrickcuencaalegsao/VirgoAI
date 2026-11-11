@@ -620,6 +620,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "config"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4539,6 +4548,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "virgo-ai"
 version = "0.1.0"
 dependencies = [
+ "config",
  "dirs 5.0.1",
  "iced",
  "ollama",
@@ -4546,7 +4556,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "toml",
  "walkdir",
 ]
 

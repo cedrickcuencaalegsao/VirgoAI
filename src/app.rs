@@ -12,12 +12,12 @@ use crate::agent::pipeline::{self, Intent, Pending, Proposal};
 use crate::agent::{ChatMessage, Role};
 use crate::chats::{self, Chat, ChatSummary};
 use crate::code::CodeDoc;
-use crate::config::Config;
 use crate::memory::retrieval;
 use crate::memory::store::{self, MemoryStore};
 use crate::project::Project;
 use crate::ui;
 use crate::workspaces::{self, Workspace};
+use config::Config;
 use ollama::client;
 use ollama::types::{ChatRequest, StreamEvent};
 
@@ -1699,9 +1699,11 @@ impl App {
                 } else {
                     Length::Fill
                 };
-                let mut panels = row![container(ui::chat::view(self))
-                    .width(chat_width)
-                    .height(Length::Fill)]
+                let mut panels = row![
+                    container(ui::chat::view(self))
+                        .width(chat_width)
+                        .height(Length::Fill)
+                ]
                 .spacing(14)
                 .height(Length::Fill);
 

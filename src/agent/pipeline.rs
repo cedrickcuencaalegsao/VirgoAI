@@ -1,6 +1,6 @@
 use super::{ChatMessage, Role};
 use crate::code::CodeDoc;
-use crate::config::Config;
+use config::Config;
 use ollama::types::{ChatMsg, ChatRequest, Options};
 
 /// How many earlier user/assistant messages are sent along as context.

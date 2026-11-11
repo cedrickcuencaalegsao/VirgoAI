@@ -2,7 +2,6 @@ mod agent;
 mod app;
 mod chats;
 mod code;
-mod config;
 mod icons;
 mod memory;
 mod project;

@@ -1,23 +1,11 @@
-//! Projects: one folder per project under `<app dir>/projects/<slug>/`.
-//!
-//! ```text
-//! <slug>/
-//!   project.md        description + decisions (knowledge, always sent)
-//!   instructions.md   project instructions (always sent as instructions)
-//!   memory/*.md       reusable knowledge notes
-//!   conversations/    readable markdown copies of this project's chats
-//!   folder.txt        optional linked code folder
-//! ```
-//! The slug is the stable project id. The display name is the `# Heading` of project.md.
-
 use std::fs;
 use std::io;
 use std::path::PathBuf;
 
 use crate::agent::Role;
 use crate::chats::Chat;
-use crate::config::app_dir;
-use crate::memory::store::{today, MemoryStore, Note};
+use crate::memory::store::{MemoryStore, Note, today};
+use config::app_dir;
 
 pub const INSTRUCTIONS: &str = "instructions.md";
 pub const PROJECT_NOTE: &str = "project.md";
@@ -44,7 +32,10 @@ pub fn dir(slug: &str) -> io::Result<PathBuf> {
     if valid(slug) {
         Ok(root().join(slug))
     } else {
-        Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid project name"))
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid project name",
+        ))
     }
 }
 
@@ -105,14 +96,15 @@ pub fn create(name: &str) -> io::Result<String> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "enter a project name"))?;
     let path = dir(&slug)?;
     if path.exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "that project already exists"));
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "that project already exists",
+        ));
     }
     fs::create_dir_all(path.join("memory"))?;
     fs::write(
         path.join(PROJECT_NOTE),
-        format!(
-            "# {name}\n\n## Description\n- What this project is.\n\n## Decisions\n- \n"
-        ),
+        format!("# {name}\n\n## Description\n- What this project is.\n\n## Decisions\n- \n"),
     )?;
     fs::write(path.join(INSTRUCTIONS), "")?;
     Ok(slug)
@@ -195,7 +187,10 @@ pub fn load_notes(slug: &str) -> Vec<Note> {
         .load_all()
         .into_iter()
         .filter(|n| is_knowledge(&n.name))
-        .map(|n| Note { name: format!("project/{}", n.name), content: n.content })
+        .map(|n| Note {
+            name: format!("project/{}", n.name),
+            content: n.content,
+        })
         .collect()
 }
 
@@ -218,7 +213,10 @@ fn chat_file(title: &str, id: &str) -> String {
 pub fn save_chat(slug: &str, chat: &Chat) -> io::Result<()> {
     let path = dir(slug)?;
     if !path.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "project folder is gone"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "project folder is gone",
+        ));
     }
     let name = format!("conversations/{}", chat_file(&chat.title, &chat.id));
     MemoryStore::new(path).write(&name, &chat_markdown(chat))?;

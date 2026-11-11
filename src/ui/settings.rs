@@ -4,7 +4,7 @@ use iced::{Element, Length};
 
 use super::style;
 use crate::app::{App, Message};
-use crate::config::Config;
+use config::Config;
 
 fn labeled<'a>(label: &'a str, input: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
     let input: Element<'a, Message> = input.into();

@@ -93,3 +93,5 @@ icon_fn!(paperclip, "paperclip.svg");
 icon_fn!(eye, "eye.svg");
 icon_fn!(lightbulb, "lightbulb.svg");
 icon_fn!(undo_2, "undo-2.svg");icon_fn!(folder_kanban, "folder-kanban.svg");
+icon_fn!(terminal, "terminal.svg");
+icon_fn!(play, "play.svg");

@@ -16,6 +16,8 @@ pub struct Config {
     pub use_planner: bool,
     pub planner_think: bool,
     pub executor_think: bool,
+    /// Apply model edits to project files as soon as a reply finishes.
+    pub auto_apply: bool,
     /// Folder reopened at startup (empty = none).
     pub last_project: String,
     /// Project (folder name) that new chats are saved into. Empty = none.
@@ -34,6 +36,7 @@ impl Default for Config {
             use_planner: true,
             planner_think: true,
             executor_think: false,
+            auto_apply: true,
             last_project: String::new(),
             active_workspace: String::new(),
         }

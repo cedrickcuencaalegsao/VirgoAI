@@ -1,6 +1,6 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
+    button, column, container, horizontal_space, pick_list, row, scrollable, text,
     text_editor, text_input, Space,
 };
 use iced::{Element, Length, Theme};
@@ -64,6 +64,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
     } else {
         icons::muted()
     };
+    let terminal_color = if app.show_terminal {
+        icons::accent()
+    } else {
+        icons::muted()
+    };
 
     let back: Element<'_, Message> = match app.chat_workspace() {
         Some(slug) => button(icons::label(
@@ -91,6 +96,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .padding(8)
             .on_press(Message::RefreshModels)
             .style(style::ghost_button),
+        button(icons::tint(icons::terminal(), 18.0, terminal_color))
+            .padding(8)
+            .on_press(Message::ToggleTerminal)
+            .style(style::ghost_button),
         button(icons::tint(icons::panel_right(), 18.0, panel_color))
             .padding(8)
             .on_press(Message::TogglePanel)
@@ -101,32 +110,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     // Model pickers get their own row, so they never get squeezed.
     let header = column![top, pickers].spacing(10);
-
-    // let header = row![
-    //     column![
-    //         text("Conversation").size(22).font(style::bold()),
-    //         text(subtitle).size(12).style(style::dim),
-    //     ]
-    //     .spacing(2),
-    //     horizontal_space(),
-    //     back,
-    //     pickers,
-    //     button(icons::label(
-    //         icons::refresh_cw(),
-    //         "Refresh",
-    //         12,
-    //         icons::muted()
-    //     ))
-    //     .padding([7, 12])
-    //     .on_press(Message::RefreshModels)
-    //     .style(style::ghost_button),
-    //     button(icons::tint(icons::panel_right(), 18.0, panel_color))
-    //         .padding(8)
-    //         .on_press(Message::TogglePanel)
-    //         .style(style::ghost_button),
-    // ]
-    // .spacing(10)
-    // .align_y(Vertical::Center);
 
     // ---- messages ----
     let body: Element<'_, Message> = if app.messages.is_empty() {
@@ -149,13 +132,17 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .height(Length::Fill);
 
     // ---- composer ----
+    let n = app.revertable();
     let remember = row![
-        checkbox("Edit mode (plan, review, then apply code)", app.edit_mode)
-            .on_toggle_maybe(
-                (app.project.is_some() && !app.is_busy()).then_some(Message::ToggleEditMode)
-            )
-            .size(16)
-            .text_size(12),
+        button(icons::label(
+            icons::undo_2(),
+            format!("Revert last AI edit ({n})"),
+            12,
+            icons::muted()
+        ))
+        .padding([6, 12])
+        .on_press_maybe((n > 0).then_some(Message::RevertLast))
+        .style(style::ghost_button),
         horizontal_space(),
         button(icons::label(
             icons::database(),
@@ -166,8 +153,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .padding([6, 12])
         .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
         .style(style::ghost_button),
-    ]
-    .align_y(Vertical::Center);
+    ];
 
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {
@@ -230,6 +216,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .height(Length::Fill)
         .into()
 }
+
 /// Editable plan with Run / Discard, shown while `app.reviewing`.
 fn plan_review(app: &App) -> Element<'_, Message> {
     container(
@@ -495,6 +482,13 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
     }
     if !msg.content.is_empty() {
         body = body.push(markdown::view(&msg.content));
+    }
+
+    // Edit / run cards, only once the reply has finished streaming.
+    if !active && msg.role == Role::Assistant {
+        if let Some(cards) = super::actions::view(app, index, &msg.content) {
+            body = body.push(cards);
+        }
     }
 
     container(body)

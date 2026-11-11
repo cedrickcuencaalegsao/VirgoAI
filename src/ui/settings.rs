@@ -20,7 +20,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let form = column![
         column![
             text("Settings").size(22).font(style::bold()),
-            text("Connection, models and memory").size(12).style(style::dim),
+            text("Connection, models and memory")
+                .size(12)
+                .style(style::dim),
         ]
         .spacing(2),
         labeled(
@@ -51,8 +53,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .padding(9)
                 .style(style::field),
         ),
-        checkbox("Plan first, then execute (two-model pipeline)", cfg.use_planner)
-            .on_toggle(Message::ToggleUsePlanner),
+        checkbox(
+            "Plan first, then execute (two-model pipeline)",
+            cfg.use_planner
+        )
+        .on_toggle(Message::ToggleUsePlanner),
         checkbox(
             "Planner think mode (needs a thinking model such as qwen3)",
             cfg.planner_think
@@ -63,6 +68,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
             cfg.executor_think
         )
         .on_toggle(Message::ToggleExecutorThink),
+        checkbox(
+            "Apply model edits to files automatically (you can always revert)",
+            cfg.auto_apply
+        )
+        .on_toggle(Message::ToggleAutoApply),
         row![
             button(text("Save settings").size(14))
                 .padding([9, 18])

@@ -1,9 +1,12 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::widget::{column, container, row, scrollable, text, text_editor};
 use iced::{Element, Length, Subscription, Task, Theme};
+
+use crate::terminal::{self, RunResult};
+use crate::workspace::{self, Action, ChangeSet};
 
 use crate::agent::pipeline::{self, Intent, Pending, Proposal};
 use crate::agent::{ChatMessage, Role};
@@ -17,6 +20,15 @@ use crate::ollama::types::{ChatRequest, StreamEvent};
 use crate::project::Project;
 use crate::ui;
 use crate::workspaces::{self, Workspace};
+
+const MAX_AGENT_STEPS: u8 = 3;
+
+#[derive(Debug, Clone)]
+pub enum ActionStatus {
+    Applied(u64),
+    Failed(String),
+    Ran(Option<i32>),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -135,6 +147,19 @@ pub enum Message {
     SaveSettings,
     WarmUp,
     WarmedUp(Result<String, String>),
+
+    // Agent actions
+    ApplyAction(usize, usize),
+    ApplyAll(usize),
+    RunAction(usize, usize),
+    RevertChange(u64),
+    RevertLast,
+    CommandFinished(Option<(usize, usize)>, RunResult),
+    ToggleTerminal,
+    TermInputChanged(String),
+    TermSubmit,
+    TermClear,
+    ToggleAutoApply(bool),
 }
 
 pub struct App {
@@ -222,6 +247,14 @@ pub struct App {
     pub selected_ws_note: Option<String>,
     pub ws_editor: text_editor::Content,
     pub new_knowledge_name: String,
+
+    pub changes: Vec<ChangeSet>,
+    pub action_status: HashMap<(usize, usize), ActionStatus>,
+    pub show_terminal: bool,
+    pub term_log: String,
+    pub term_input: String,
+    pub term_running: bool,
+    agent_steps: u8,
 }
 
 impl App {
@@ -279,6 +312,13 @@ impl App {
             suggest_line: None,
             suggest_input: String::new(),
             suggesting: None,
+            changes: Vec::new(),
+            action_status: HashMap::new(),
+            show_terminal: false,
+            term_log: String::new(),
+            term_input: String::new(),
+            term_running: false,
+            agent_steps: 0,
             scout_must: Vec::new(),
             scout_files: Vec::new(),
             workspaces: workspace_list,
@@ -356,6 +396,7 @@ impl App {
                     self.current_chat = None;
                     self.chat_project = None;
                     self.status = "New chat".into();
+                    self.action_status.clear();
                 }
                 self.screen = Screen::Chat;
                 Task::none()
@@ -369,7 +410,10 @@ impl App {
                 self.input = value;
                 Task::none()
             }
-            Message::Send => self.send(),
+            Message::Send => {
+                self.agent_steps = 0;
+                self.send()
+            }
             Message::Stop => self.stop(),
             Message::Stream(event) => self.on_stream(event),
             Message::Copy(content) => {
@@ -384,10 +428,38 @@ impl App {
             Message::DiscardPlan => {
                 self.reviewing = false;
                 self.pending = None;
+                if self.messages.last().is_some_and(|m| m.role == Role::Plan) {
+                    self.messages.pop();
+                }
                 self.status = "Plan discarded".into();
+                self.save_chat();
                 Task::none()
             }
-            Message::RunPlan => self.run_plan(),
+            Message::RunPlan => {
+                if !self.reviewing {
+                    return Task::none();
+                }
+                let edited = self.plan_editor.text().trim().to_string();
+                self.reviewing = false;
+
+                // Show the user's version in the plan bubble.
+                if let Some(m) = self
+                    .messages
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.role == Role::Plan)
+                {
+                    m.content = edited.clone();
+                }
+                self.save_chat();
+
+                let plan = if edited.is_empty() {
+                    None
+                } else {
+                    Some(edited)
+                };
+                self.start_executor(plan)
+            }
             Message::ReviewChange(file) => self.review_change(file),
 
             // ---- project panel ----
@@ -749,14 +821,74 @@ impl App {
                 }
                 Task::none()
             }
+            Message::Send => {
+                self.agent_steps = 0;
+                self.send()
+            }
+            Message::ApplyAction(msg, idx) => {
+                self.apply_edits(msg, Some(idx));
+                Task::none()
+            }
+            Message::ApplyAll(msg) => {
+                self.apply_edits(msg, None);
+                Task::none()
+            }
+            Message::RevertChange(id) => {
+                self.revert(Some(id));
+                Task::none()
+            }
+            Message::RevertLast => {
+                self.revert(None);
+                Task::none()
+            }
+            Message::RunAction(msg, idx) => {
+                let command = self
+                    .messages
+                    .get(msg)
+                    .map(|m| workspace::parse_actions(&m.content))
+                    .and_then(|a| match a.into_iter().nth(idx) {
+                        Some(Action::Run(c)) => Some(c),
+                        _ => None,
+                    });
+                match command {
+                    Some(c) => self.run_command(Some((msg, idx)), c),
+                    None => Task::none(),
+                }
+            }
+            Message::CommandFinished(key, result) => self.on_command_finished(key, result),
+            Message::ToggleTerminal => {
+                self.show_terminal = !self.show_terminal;
+                Task::none()
+            }
+            Message::TermInputChanged(v) => {
+                self.term_input = v;
+                Task::none()
+            }
+            Message::TermSubmit => {
+                let command = self.term_input.trim().to_string();
+                if command.is_empty() {
+                    Task::none()
+                } else {
+                    self.term_input.clear();
+                    self.run_command(None, command)
+                }
+            }
+            Message::TermClear => {
+                self.term_log.clear();
+                Task::none()
+            }
+            Message::ToggleAutoApply(v) => {
+                self.cfg.auto_apply = v;
+                self.persist();
+                Task::none()
+            }
         }
     }
 
     // -----------------------------------------------------------------------
     // chat pipeline: planner stream -> executor stream
     // -----------------------------------------------------------------------
-
-    fn send(&mut self) -> Task<Message> {
+       fn send(&mut self) -> Task<Message> {
         let raw = self.input.trim().to_string();
         if raw.is_empty() || self.is_busy() {
             return Task::none();
@@ -827,6 +959,35 @@ impl App {
         }
     }
 
+    /// Build the context, push the user message and start the planner or executor.
+    /// Follow-up turns from command output call this with `use_planner = false`.
+        /// Send command output back to the model. Skips scouting, planning and review.
+    fn follow_up(&mut self, text: String) -> Task<Message> {
+        let history = pipeline::history_from(&self.messages);
+        let mut notes = self.store.load_all();
+        let mut instructions = String::new();
+        if let Some(slug) = self.chat_workspace() {
+            instructions = workspaces::instructions(&slug);
+            notes.extend(workspaces::load_notes(&slug));
+        }
+        let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
+        let memory = retrieval::build_context(&notes, &text, budget_chars);
+        let (project, files) = self.project_context(&text);
+
+        self.messages
+            .push(ChatMessage::new(Role::User, text.clone()).with_files(files));
+        self.save_chat();
+        self.pending = Some(Pending {
+            task: text,
+            memory,
+            history,
+            project,
+            intent: self.intent,
+            instructions,
+        });
+        self.start_executor(None)
+    }
+
     fn start_executor(&mut self, plan: Option<String>) -> Task<Message> {
         let Some(pending) = self.pending.take() else {
             return Task::none();
@@ -875,7 +1036,7 @@ impl App {
         }
     }
 
-    fn on_stage_done(&mut self) -> Task<Message> {
+        fn on_stage_done(&mut self) -> Task<Message> {
         self.abort = None;
         self.finish_thinking();
 
@@ -963,6 +1124,10 @@ impl App {
                     };
                 } else {
                     self.status = "Done".into();
+                    if self.cfg.auto_apply {
+                        let idx = self.messages.len().saturating_sub(1);
+                        self.apply_edits(idx, None);
+                    }
                 }
 
                 self.save_chat();
@@ -1238,6 +1403,11 @@ impl App {
         };
 
         let mut files: Vec<String> = self.attached.iter().cloned().collect();
+        if let Some(doc) = &self.code {
+            if !files.contains(&doc.rel) {
+                files.insert(0, doc.rel.clone());
+            }
+        }
         for rel in project.resolve_mentions(message) {
             if !files.contains(&rel) {
                 files.push(rel);
@@ -1329,6 +1499,7 @@ impl App {
                 self.chat_project = project;
                 self.messages = chat.messages;
                 self.current_chat = Some(chat.id);
+                self.action_status.clear();
                 self.pending = None;
                 self.screen = Screen::Chat;
                 if let Some(slug) = self.chat_project.clone() {
@@ -1544,7 +1715,18 @@ impl App {
                 if self.show_panel {
                     panels = panels.push(ui::project_panel::view(self));
                 }
-                panels.into()
+                let panels: Element<'_, Message> = panels.into();
+                if self.show_terminal {
+                    column![
+                        container(panels).height(Length::Fill),
+                        ui::terminal_panel::view(self)
+                    ]
+                    .spacing(14)
+                    .height(Length::Fill)
+                    .into()
+                } else {
+                    panels
+                }
             }
             Screen::Memory => ui::memory::view(self),
             Screen::Settings => ui::settings::view(self),
@@ -1969,6 +2151,189 @@ impl App {
         if !already {
             self.open_project(expand_home(&path));
         }
+    }
+
+    pub fn revertable(&self) -> usize {
+        self.changes.iter().filter(|c| !c.reverted).count()
+    }
+
+    fn apply_edits(&mut self, msg_idx: usize, only: Option<usize>) {
+        let Some(content) = self.messages.get(msg_idx).map(|m| m.content.clone()) else {
+            return;
+        };
+        let actions = workspace::parse_actions(&content);
+        if !actions.iter().any(|a| matches!(a, Action::Edit { .. })) {
+            return;
+        }
+        let Some(root) = self.project.as_ref().map(|p| p.root.clone()) else {
+            self.status = "Open a project folder to apply edits".into();
+            return;
+        };
+
+        let mut set = ChangeSet::new();
+        let mut failed = 0;
+        for (i, action) in actions.iter().enumerate() {
+            if only.is_some_and(|o| o != i) {
+                continue;
+            }
+            let Action::Edit { path, hunks } = action else {
+                continue;
+            };
+            if matches!(
+                self.action_status.get(&(msg_idx, i)),
+                Some(ActionStatus::Applied(_))
+            ) {
+                continue;
+            }
+            match workspace::apply_edit(&root, path, hunks) {
+                Ok(change) => {
+                    set.record(change);
+                    self.action_status
+                        .insert((msg_idx, i), ActionStatus::Applied(set.id));
+                }
+                Err(e) => {
+                    failed += 1;
+                    self.action_status
+                        .insert((msg_idx, i), ActionStatus::Failed(e));
+                }
+            }
+        }
+
+        if set.files.is_empty() {
+            if failed > 0 {
+                self.status = format!("{failed} edit(s) could not be applied (see the cards)");
+            }
+            return;
+        }
+        let files: Vec<String> = set.files.iter().map(|f| f.rel.clone()).collect();
+        self.changes.push(set);
+        self.after_disk_change(&files);
+        self.status = format!(
+            "Applied edits to {}{}",
+            files.join(", "),
+            if failed > 0 {
+                format!(" ({failed} failed)")
+            } else {
+                String::new()
+            }
+        );
+    }
+
+    fn revert(&mut self, id: Option<u64>) {
+        let Some(root) = self.project.as_ref().map(|p| p.root.clone()) else {
+            return;
+        };
+        let pos = match id {
+            Some(id) => self.changes.iter().position(|c| c.id == id && !c.reverted),
+            None => self.changes.iter().rposition(|c| !c.reverted),
+        };
+        let Some(pos) = pos else {
+            self.status = "Nothing to revert".into();
+            return;
+        };
+
+        let (restored, skipped) = self.changes[pos].revert(&root);
+        let change_id = self.changes[pos].id;
+        self.changes[pos].reverted = true;
+        self.action_status
+            .retain(|_, s| !matches!(s, ActionStatus::Applied(i) if *i == change_id));
+        self.after_disk_change(&restored);
+
+        self.status = if skipped.is_empty() {
+            format!("Reverted {}", restored.join(", "))
+        } else {
+            format!(
+                "Reverted {}; skipped {} (edited since)",
+                restored.join(", "),
+                skipped.join(", ")
+            )
+        };
+    }
+
+    /// Reload the open file and rescan the tree after files changed on disk.
+    fn after_disk_change(&mut self, files: &[String]) {
+        if let Some(doc) = self.code.as_mut() {
+            if files.iter().any(|f| *f == doc.rel) {
+                let _ = doc.reload();
+            }
+        }
+        self.refresh_project();
+    }
+
+    fn run_command(&mut self, key: Option<(usize, usize)>, command: String) -> Task<Message> {
+        let Some(root) = self.project.as_ref().map(|p| p.root.clone()) else {
+            self.status = "Open a project folder first".into();
+            return Task::none();
+        };
+        if self.term_running {
+            self.status = "A command is already running".into();
+            return Task::none();
+        }
+        self.term_running = true;
+        self.show_terminal = true;
+        self.term_log.push_str(&format!("$ {command}\n"));
+        self.status = format!("Running: {command}");
+        Task::perform(terminal::run(root, command.clone()), move |result| {
+            Message::CommandFinished(key, result)
+        })
+    }
+
+    fn on_command_finished(
+        &mut self,
+        key: Option<(usize, usize)>,
+        result: RunResult,
+    ) -> Task<Message> {
+        self.term_running = false;
+        self.term_log.push_str(&result.output);
+        if !result.output.ends_with('\n') {
+            self.term_log.push('\n');
+        }
+        self.term_log.push_str(&match result.code {
+            Some(code) => format!("[exit {code}]\n\n"),
+            None if result.timed_out => "[timed out]\n\n".to_string(),
+            None => "[no exit code]\n\n".to_string(),
+        });
+        if self.term_log.len() > 40_000 {
+            let cut = self.term_log.len() - 30_000;
+            let cut = (cut..)
+                .find(|i| self.term_log.is_char_boundary(*i))
+                .unwrap_or(0);
+            self.term_log.drain(..cut);
+        }
+        let scroll = scrollable::snap_to(
+            ui::terminal_panel::scroll_id(),
+            scrollable::RelativeOffset::END,
+        );
+        self.status = "Command finished".into();
+
+        // Only commands the model proposed are fed back to it.
+        let Some(key) = key else { return scroll };
+        self.action_status
+            .insert(key, ActionStatus::Ran(result.code));
+        if self.agent_steps >= MAX_AGENT_STEPS || self.is_busy() {
+            return scroll;
+        }
+        self.agent_steps += 1;
+
+        let command = self
+            .messages
+            .get(key.0)
+            .map(|m| workspace::parse_actions(&m.content))
+            .and_then(|a| match a.into_iter().nth(key.1) {
+                Some(Action::Run(c)) => Some(c),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let status = result
+            .code
+            .map_or("no exit code".to_string(), |c| format!("exit code {c}"));
+        let feedback = format!(
+            "I ran `{command}` ({status}). Output:\n```\n{}\n```\n\
+         If something failed, fix it with edit blocks. If it worked, say so briefly.",
+            terminal::tail(&result.output, 6000)
+        );
+        // Skip the planner for these follow-up turns to keep the loop fast.
+        Task::batch([scroll, self.follow_up(feedback)])
     }
 }
 

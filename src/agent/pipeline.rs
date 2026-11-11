@@ -65,6 +65,24 @@ around the output). SEARCH must match the file exactly (including indentation) a
 the file. Keep blocks small: change only a few lines each, never the whole file. Use an empty \
 REPLACE section to delete lines. Output only these blocks, no prose.";
 
+const EDIT_PROTOCOL: &str = "# Editing project files\n\
+When the user asks you to change, fix or create code, do NOT paste whole files. \
+Write one fenced block per file, with the info string `edit` followed by the path relative \
+to the project root:\n\
+````edit src/main.rs\n\
+<<<<<<< SEARCH\n\
+exact lines copied from the current file\n\
+=======\n\
+replacement lines\n\
+>>>>>>> REPLACE\n\
+```\n\
+Rules: SEARCH must match the current file exactly (copy it, including indentation) and include \
+2-3 lines of context so it is unique. You may use several SEARCH/REPLACE pairs in one block. \
+To create a new file leave SEARCH empty. To delete lines leave REPLACE empty. Only edit files \
+whose contents were provided. To verify your work you may add a block with the info string `run` \
+containing ONE shell command (for example `cargo check`); the user will approve it and you will \
+receive the output. Keep explanations short.";
+
 /// One search/replace block proposed by the model.
 #[derive(Debug, Clone)]
 pub struct Proposal {
@@ -177,7 +195,11 @@ fn file_from_line(t: &str, known: &[String]) -> Option<String> {
     let cleaned = t.trim_start_matches('#').replace(['*', '`'], "");
     let cleaned = cleaned.trim();
     let explicit = cleaned.to_lowercase().starts_with("file:");
-    let candidate = if explicit { cleaned.get(5..)?.trim() } else { cleaned };
+    let candidate = if explicit {
+        cleaned.get(5..)?.trim()
+    } else {
+        cleaned
+    };
     let candidate = candidate
         .trim_matches(|c| c == '"' || c == '\'' || c == ':')
         .trim();
@@ -259,6 +281,10 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
     append_instructions(&mut system, &pending.instructions); // <- new
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
+    if !pending.project.trim().is_empty() {
+        system.push_str("\n\n");
+        system.push_str(EDIT_PROTOCOL);
+    }
     if let Some(plan) = plan {
         system.push_str("\n\n# Plan to follow\n");
         system.push_str(plan);

@@ -7,7 +7,9 @@ mod icons;
 mod memory;
 mod ollama;
 mod project;
+mod terminal;
 mod ui;
+mod workspace;
 mod workspaces;
 
 fn main() -> iced::Result {

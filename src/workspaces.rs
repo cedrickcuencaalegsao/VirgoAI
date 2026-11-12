@@ -3,7 +3,7 @@ use std::io;
 use std::path::PathBuf;
 
 use agent::Role;
-use crate::chats::Chat;
+use chats::Chat;
 use memory::store::{MemoryStore, Note, today};
 use config::app_dir;
 

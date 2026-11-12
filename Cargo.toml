@@ -17,3 +17,4 @@ project = { path = "project" }
 memory = { path = "memory" }
 code = { path = "code" }
 agent = { path = "agent" }
+chats = { path = "chats" }

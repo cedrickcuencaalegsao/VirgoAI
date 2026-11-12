@@ -12,7 +12,7 @@ use iced::{Element, Length};
 
 use super::{short, style};
 use crate::app::{App, Message, Screen};
-use crate::chats::{self, ChatSummary};
+use chats::{self, ChatSummary};
 use crate::icons;
 use crate::workspaces::{Workspace, PROJECT_NOTE};
 

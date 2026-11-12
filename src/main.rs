@@ -1,5 +1,4 @@
 mod app;
-mod chats;
 mod icons;
 mod terminal;
 mod ui;

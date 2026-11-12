@@ -10,7 +10,7 @@ use crate::workspace::{self, Action, ChangeSet};
 
 use agent::pipeline::{self, Intent, Pending, Proposal};
 use agent::{ChatMessage, Role};
-use crate::chats::{self, Chat, ChatSummary};
+use chats::{self, Chat, ChatSummary};
 use crate::ui;
 use crate::workspaces::{self, Workspace};
 use code::CodeDoc;

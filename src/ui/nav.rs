@@ -5,7 +5,7 @@ use iced::{Element, Length};
 use super::{short, style};
 use crate::app::{App, Message, Screen};
 use crate::icons;
-use crate::workspaces::Workspace;
+use workspaces::Workspace;
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let brand = column![

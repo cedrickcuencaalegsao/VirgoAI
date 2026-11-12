@@ -5,7 +5,7 @@ use iced::{Element, Font, Length, Theme};
 use super::{short, style};
 use crate::app::{ActionStatus, App, Message};
 use crate::icons;
-use crate::workspace::{self, Action, Hunk};
+use workspace::{self, Action, Hunk};
 
 const PREVIEW_LINES: usize = 6;
 

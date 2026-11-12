@@ -5,14 +5,14 @@ use std::time::{Duration, Instant};
 use iced::widget::{column, container, row, scrollable, text, text_editor};
 use iced::{Element, Length, Subscription, Task, Theme};
 
-use crate::terminal::{self, RunResult};
-use crate::workspace::{self, Action, ChangeSet};
+use terminal::{self, RunResult};
+use workspace::{self, Action, ChangeSet};
 
 use agent::pipeline::{self, Intent, Pending, Proposal};
 use agent::{ChatMessage, Role};
 use chats::{self, Chat, ChatSummary};
 use crate::ui;
-use crate::workspaces::{self, Workspace};
+use workspaces::{self, Workspace};
 use code::CodeDoc;
 use config::Config;
 use memory::retrieval;

@@ -1,0 +1,10 @@
+[package]
+name = "workspaces"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent = { path = "../agent" }
+chats = { path = "../chats" }
+memory = { path = "../memory" }
+config = { path = "../config" }

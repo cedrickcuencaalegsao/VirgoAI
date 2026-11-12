@@ -1,9 +1,9 @@
 mod app;
 mod icons;
-mod terminal;
+// mod terminal;
 mod ui;
-mod workspace;
-mod workspaces;
+// mod workspace;
+// mod workspaces;
 
 fn main() -> iced::Result {
     iced::application("Virgo AI", app::App::update, app::App::view)

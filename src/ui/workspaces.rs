@@ -14,7 +14,7 @@ use super::{short, style};
 use crate::app::{App, Message, Screen};
 use chats::{self, ChatSummary};
 use crate::icons;
-use crate::workspaces::{Workspace, PROJECT_NOTE};
+use workspaces::{Workspace, PROJECT_NOTE};
 
 pub fn view(app: &App) -> Element<'_, Message> {
     match (app.screen, app.selected_workspace.as_deref()) {

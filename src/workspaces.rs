@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 
-use crate::agent::Role;
+use agent::Role;
 use crate::chats::Chat;
 use memory::store::{MemoryStore, Note, today};
 use config::app_dir;

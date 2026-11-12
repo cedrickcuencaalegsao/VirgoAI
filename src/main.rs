@@ -1,7 +1,5 @@
-mod agent;
 mod app;
 mod chats;
-mod code;
 mod icons;
 mod terminal;
 mod ui;

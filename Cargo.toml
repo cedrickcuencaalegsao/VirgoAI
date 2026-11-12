@@ -10,8 +10,10 @@ rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
-walkdir = "2"
+# walkdir = "2"
 ollama = { path = "ollama" }
 config = { path = "config" }
 project = { path = "project" }
 memory = { path = "memory" }
+code = { path = "code" }
+agent = { path = "agent" }

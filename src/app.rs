@@ -8,12 +8,12 @@ use iced::{Element, Length, Subscription, Task, Theme};
 use crate::terminal::{self, RunResult};
 use crate::workspace::{self, Action, ChangeSet};
 
-use crate::agent::pipeline::{self, Intent, Pending, Proposal};
-use crate::agent::{ChatMessage, Role};
+use agent::pipeline::{self, Intent, Pending, Proposal};
+use agent::{ChatMessage, Role};
 use crate::chats::{self, Chat, ChatSummary};
-use crate::code::CodeDoc;
 use crate::ui;
 use crate::workspaces::{self, Workspace};
+use code::CodeDoc;
 use config::Config;
 use memory::retrieval;
 use memory::store::{self, MemoryStore};
@@ -1948,7 +1948,7 @@ impl App {
         self.status = match workspaces::link_folder(&slug, &path) {
             Ok(()) => {
                 self.linked_folder = Some(path);
-                "Linked the open folder to this project".into()
+                String::from("Linked the open folder to this project")
             }
             Err(e) => format!("Could not link folder: {e}"),
         };

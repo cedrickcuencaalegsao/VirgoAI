@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{ChatMessage, Role};
+use agent::{ChatMessage, Role};
 use config::app_dir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

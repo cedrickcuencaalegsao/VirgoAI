@@ -1,5 +1,5 @@
 use super::{ChatMessage, Role};
-use crate::code::CodeDoc;
+use code::CodeDoc;
 use config::Config;
 use ollama::types::{ChatMsg, ChatRequest, Options};
 

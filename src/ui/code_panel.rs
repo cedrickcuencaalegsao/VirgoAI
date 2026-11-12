@@ -5,14 +5,14 @@
 
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, column, container, horizontal_space, row, scrollable, text, text_input, Space, Svg,
+    Space, Svg, button, column, container, horizontal_space, row, scrollable, text, text_input,
 };
 use iced::{Element, Font, Length, Theme};
 
 use super::{short, style};
 use crate::app::{App, Message};
-use crate::code::{self, CodeDoc, RowKind, RowRef};
 use crate::icons;
+use code::{self, CodeDoc, RowKind, RowRef};
 
 /// Every row has exactly this height, which is what makes windowing possible.
 const ROW_H: f32 = 24.0;
@@ -186,10 +186,12 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
         } else {
             icons::muted()
         };
-        let mut buttons = row![button(icons::tint(icons::lightbulb(), 13.0, bulb_color))
-            .padding([5, 6])
-            .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
-            .style(style::ghost_button)];
+        let mut buttons = row![
+            button(icons::tint(icons::lightbulb(), 13.0, bulb_color))
+                .padding([5, 6])
+                .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
+                .style(style::ghost_button)
+        ];
         if kind == RowKind::Removed {
             buttons = buttons.push(
                 button(icons::tint(icons::undo_2(), 13.0, icons::muted()))

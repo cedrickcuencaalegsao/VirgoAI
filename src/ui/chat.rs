@@ -6,7 +6,7 @@ use iced::widget::{
 use iced::{Element, Length, Theme};
 
 use super::{markdown, short, style};
-use crate::agent::{ChatMessage, Role};
+use agent::{ChatMessage, Role};
 use crate::app::{App, Message};
 use crate::icons;
 

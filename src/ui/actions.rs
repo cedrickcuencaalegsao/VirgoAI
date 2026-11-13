@@ -9,8 +9,17 @@ use workspace::{self, Action, Hunk};
 
 const PREVIEW_LINES: usize = 6;
 
-pub fn view<'a>(app: &App, msg_idx: usize, content: &str) -> Option<Element<'a, Message>> {
-    let actions = workspace::parse_actions(content);
+pub fn view<'a>(
+    app: &App,
+    msg_idx: usize,
+    content: &str,
+    streaming: bool,
+) -> Option<Element<'a, Message>> {
+    let actions = if streaming {
+        workspace::completed_actions(content)
+    } else {
+        workspace::parse_actions(content)
+    };
     if actions.is_empty() {
         return None;
     }
@@ -29,10 +38,16 @@ pub fn view<'a>(app: &App, msg_idx: usize, content: &str) -> Option<Element<'a, 
             Action::Run(command) => {
                 list = list.push(run_card(app, msg_idx, i, command, status));
             }
+            Action::Delete(path) => {
+                if !matches!(status, Some(ActionStatus::Applied(_))) {
+                    unapplied += 1;
+                }
+                list = list.push(delete_card(app, msg_idx, i, path, status));
+            }
         }
     }
 
-    if unapplied > 1 {
+    if unapplied > 1 && !streaming {
         list = list.push(
             button(icons::label(
                 icons::check(),
@@ -49,7 +64,11 @@ pub fn view<'a>(app: &App, msg_idx: usize, content: &str) -> Option<Element<'a, 
 }
 
 fn line_count(text: &str) -> usize {
-    if text.is_empty() { 0 } else { text.lines().count() }
+    if text.is_empty() {
+        0
+    } else {
+        text.lines().count()
+    }
 }
 
 fn edit_card<'a>(
@@ -67,7 +86,9 @@ fn edit_card<'a>(
         icons::tint(icons::file_text(), 15.0, icons::accent()),
         text(path.to_string()).size(13).font(style::bold()),
         text(format!("+{added}")).size(12).style(style::success),
-        text(format!("-{removed}")).size(12).style(style::danger_text),
+        text(format!("-{removed}"))
+            .size(12)
+            .style(style::danger_text),
         horizontal_space(),
     ]
     .spacing(8)
@@ -86,12 +107,19 @@ fn edit_card<'a>(
         }
         _ => {
             header = header.push(
-                button(icons::label(icons::check(), "Apply", 12, icons::on_primary()))
-                    .padding([5, 12])
-                    .on_press_maybe(
-                        app.project.is_some().then_some(Message::ApplyAction(msg_idx, i)),
-                    )
-                    .style(style::primary_button),
+                button(icons::label(
+                    icons::check(),
+                    "Apply",
+                    12,
+                    icons::on_primary(),
+                ))
+                .padding([5, 12])
+                .on_press_maybe(
+                    app.project
+                        .is_some()
+                        .then_some(Message::ApplyAction(msg_idx, i)),
+                )
+                .style(style::primary_button),
             );
         }
     }
@@ -102,7 +130,11 @@ fn edit_card<'a>(
     }
     body = body.push(diff_preview(hunks));
 
-    container(body).padding(10).width(Length::Fill).style(style::code_block).into()
+    container(body)
+        .padding(10)
+        .width(Length::Fill)
+        .style(style::code_block)
+        .into()
 }
 
 fn diff_preview<'a>(hunks: &[Hunk]) -> Element<'a, Message> {
@@ -114,7 +146,11 @@ fn diff_preview<'a>(hunks: &[Hunk]) -> Element<'a, Message> {
             }
             let more = block.lines().count().saturating_sub(PREVIEW_LINES);
             if more > 0 {
-                rows = rows.push(text(format!("   ... {more} more line(s)")).size(11).style(style::dim));
+                rows = rows.push(
+                    text(format!("   ... {more} more line(s)"))
+                        .size(11)
+                        .style(style::dim),
+                );
             }
         }
     }
@@ -123,12 +159,18 @@ fn diff_preview<'a>(hunks: &[Hunk]) -> Element<'a, Message> {
 
 fn diff_row<'a>(marker: &str, line: &str, added: bool) -> Element<'a, Message> {
     container(
-        text(format!("{marker} {}", short(line, 110))).font(Font::MONOSPACE).size(12),
+        text(format!("{marker} {}", short(line, 110)))
+            .font(Font::MONOSPACE)
+            .size(12),
     )
     .width(Length::Fill)
     .padding([1, 6])
     .style(move |theme: &Theme| {
-        if added { style::row_added(theme) } else { style::row_removed(theme) }
+        if added {
+            style::row_added(theme)
+        } else {
+            style::row_removed(theme)
+        }
     })
     .into()
 }
@@ -150,7 +192,10 @@ fn run_card<'a>(
     container(
         row![
             icons::tint(icons::terminal(), 15.0, icons::accent()),
-            text(command.to_string()).font(Font::MONOSPACE).size(13).width(Length::Fill),
+            text(command.to_string())
+                .font(Font::MONOSPACE)
+                .size(13)
+                .width(Length::Fill),
             text(note).size(12).style(style::dim),
             button(icons::label(icons::play(), label, 12, icons::on_primary()))
                 .padding([5, 12])
@@ -164,4 +209,43 @@ fn run_card<'a>(
     .width(Length::Fill)
     .style(style::code_block)
     .into()
+}
+
+fn delete_card<'a>(
+    app: &App,
+    msg_idx: usize,
+    i: usize,
+    path: &str,
+    status: Option<&ActionStatus>,
+) -> Element<'a, Message> {
+    let mut header = row![
+        icons::tint(icons::trash_2(), 15.0, icons::accent()),
+        text(format!("Delete {path}")).size(13).font(style::bold()),
+        horizontal_space(),
+    ]
+    .spacing(8)
+    .align_y(Vertical::Center);
+
+    header = match status {
+        Some(ActionStatus::Applied(id)) => header
+            .push(text("Deleted").size(12).style(style::success))
+            .push(
+                button(icons::label(icons::undo_2(), "Revert", 12, icons::muted()))
+                    .padding([5, 10])
+                    .on_press(Message::RevertChange(*id))
+                    .style(style::ghost_button),
+            ),
+        _ => header.push(
+            button(icons::label(icons::check(), "Apply", 12, icons::on_primary()))
+                .padding([5, 12])
+                .on_press_maybe(app.project.is_some().then_some(Message::ApplyAction(msg_idx, i)))
+                .style(style::primary_button),
+        ),
+    };
+
+    let mut body = column![header].spacing(6);
+    if let Some(ActionStatus::Failed(error)) = status {
+        body = body.push(text(error.clone()).size(12).style(style::danger_text));
+    }
+    container(body).padding(10).width(Length::Fill).style(style::code_block).into()
 }

@@ -1,4 +1,4 @@
-# Virgo AI
+# Virgo AI — Open-source platform for AI enthusiasts
 
 A native macOS desktop app built with **Rust** and **iced** that talks to a locally running **Ollama**. A **planner model** thinks the task through, an **executor model** writes the answer, **markdown notes on your SSD** act as long-term memory, and you can **open a project folder** and bring its files into the chat. Everything stays on your machine.
 

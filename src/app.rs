@@ -8,11 +8,10 @@ use iced::{Element, Length, Subscription, Task, Theme};
 use terminal::{self, RunResult};
 use workspace::{self, Action, ChangeSet};
 
+use crate::ui;
 use agent::pipeline::{self, Intent, Pending, Proposal};
 use agent::{ChatMessage, Role};
 use chats::{self, Chat, ChatSummary};
-use crate::ui;
-use workspaces::{self, Workspace};
 use code::CodeDoc;
 use config::Config;
 use memory::retrieval;
@@ -20,6 +19,7 @@ use memory::store::{self, MemoryStore};
 use ollama::client;
 use ollama::types::{ChatRequest, StreamEvent};
 use project::Project;
+use workspaces::{self, Workspace};
 
 const MAX_AGENT_STEPS: u8 = 3;
 
@@ -254,7 +254,8 @@ pub struct App {
     pub term_log: String,
     pub term_input: String,
     pub term_running: bool,
-    agent_steps: u8,
+    pub agent_steps: u8,
+    pub streamed_actions: usize,
 }
 
 impl App {
@@ -319,6 +320,7 @@ impl App {
             term_input: String::new(),
             term_running: false,
             agent_steps: 0,
+            streamed_actions: 0,
             scout_must: Vec::new(),
             scout_files: Vec::new(),
             workspaces: workspace_list,
@@ -990,6 +992,7 @@ impl App {
         };
 
         let request = pipeline::executor_request(&self.cfg, &pending, plan.as_deref());
+        self.streamed_actions = 0;
         self.messages
             .push(ChatMessage::new(Role::Assistant, String::new()));
         self.begin_stage(Phase::Executing);
@@ -1025,6 +1028,9 @@ impl App {
             }
             StreamEvent::Token(token) => {
                 self.append_content(&token);
+                if token.contains('`') {
+                    self.apply_streamed(false);
+                }
                 scroll_to_end()
             }
             StreamEvent::Done => self.on_stage_done(),
@@ -1078,40 +1084,55 @@ impl App {
             }
             Phase::Executing => {
                 self.phase = Phase::Idle;
+                let idx = self.messages.len().saturating_sub(1);
+                let mut next = Task::none();
 
-                if self.intent == Intent::Change {
+                if self.cfg.auto_apply {
+                    self.apply_streamed(true); // flush anything left (e.g. unclosed last fence)
+                    let (ok, bad) = self.edit_counts(idx);
+                    if ok + bad > 0 {
+                        self.status = format!(
+                            "Execution finished: {ok} change(s) written and verified, {bad} failed."
+                        );
+                        if bad > 0 {
+                            next = self.retry_failed(idx);
+                        }
+                    } else if self.intent == Intent::Change {
+                        self.status =
+                            "The executor produced no edit blocks, so no file was changed.".into();
+                    } else {
+                        self.status = "Done".into();
+                    }
+                } else if self.intent == Intent::Change {
+                    // Review mode (auto-apply off): stage the same blocks in the code panel.
                     let reply = self
                         .messages
                         .last()
                         .map(|m| pipeline::strip_think_tags(&m.content))
                         .unwrap_or_default();
-                    let known: Vec<String> = self
-                        .project
-                        .as_ref()
-                        .map(|p| {
-                            p.entries
-                                .iter()
-                                .filter(|e| !e.is_dir)
-                                .map(|e| e.rel.clone())
-                                .collect()
+                    self.proposals = workspace::parse_actions(&reply)
+                        .into_iter()
+                        .filter_map(|a| match a {
+                            Action::Edit { path, hunks } => Some((path, hunks)),
+                            _ => None,
                         })
-                        .unwrap_or_default();
-                    let default_file = self.code.as_ref().map(|d| d.rel.clone()).or_else(|| {
-                        (self.scout_must.len() == 1)
-                            .then(|| self.scout_must.first().cloned())
-                            .flatten()
-                    });
-                    self.proposals = pipeline::parse_edits(&reply, &known, default_file.as_deref());
-
-                    let mut files: Vec<&str> = Vec::new();
-                    for p in &self.proposals {
-                        if !files.contains(&p.file.as_str()) {
-                            files.push(p.file.as_str());
-                        }
-                    }
+                        .flat_map(|(path, hunks)| {
+                            hunks.into_iter().map(move |h| Proposal {
+                                file: path.clone(),
+                                search: h.search,
+                                replace: h.replace,
+                            })
+                        })
+                        .collect();
                     self.status = if self.proposals.is_empty() {
-                        "No edit blocks found in the reply. Open the file you want changed in the code panel, keep the request small (one change), and try again.".into()
+                        "No edit blocks found in the reply. Keep the request small (one change) and try again.".into()
                     } else {
+                        let mut files: Vec<&str> = Vec::new();
+                        for p in &self.proposals {
+                            if !files.contains(&p.file.as_str()) {
+                                files.push(p.file.as_str());
+                            }
+                        }
                         format!(
                             "{} change(s) in {} file(s). Click a file below to review it.",
                             self.proposals.len(),
@@ -1120,14 +1141,10 @@ impl App {
                     };
                 } else {
                     self.status = "Done".into();
-                    if self.cfg.auto_apply {
-                        let idx = self.messages.len().saturating_sub(1);
-                        self.apply_edits(idx, None);
-                    }
                 }
 
                 self.save_chat();
-                Task::none()
+                next
             }
             Phase::Scouting => Task::none(),
             Phase::Idle => Task::none(),
@@ -1676,11 +1693,9 @@ impl App {
                 } else {
                     Length::Fill
                 };
-                let mut panels = row![
-                    container(ui::chat::view(self))
-                        .width(chat_width)
-                        .height(Length::Fill)
-                ]
+                let mut panels = row![container(ui::chat::view(self))
+                    .width(chat_width)
+                    .height(Length::Fill)]
                 .spacing(14)
                 .height(Length::Fill);
 
@@ -2089,6 +2104,10 @@ impl App {
     /// Open the project's linked folder unless it is already the open one.
     fn sync_folder(&mut self, slug: &str) {
         let Some(path) = workspaces::linked_folder(slug) else {
+            self.close_code();
+            self.project = None;
+            self.expanded.clear();
+            self.attached.clear();
             return;
         };
         let already = self
@@ -2104,36 +2123,92 @@ impl App {
         self.changes.iter().filter(|c| !c.reverted).count()
     }
 
+    fn edit_root(&self) -> Result<PathBuf, String> {
+        let project = self
+            .project
+            .as_ref()
+            .ok_or("Open a project folder to apply edits")?;
+        if let Some(slug) = &self.chat_project {
+            match workspaces::linked_folder(slug) {
+                Some(linked) if same_dir(&expand_home(&linked), &project.root) => {}
+                Some(_) => return Err("The open folder is not this project's folder".into()),
+                None => return Err("This project has no linked folder yet".into()),
+            }
+        }
+        Ok(project.root.clone())
+    }
+
+    /// Apply blocks of the assistant reply that are complete. `final_pass` also reads a
+    /// truncated last block. Each block is written and verified before the next one.
+    fn apply_streamed(&mut self, final_pass: bool) {
+        if !self.cfg.auto_apply || self.project.is_none() {
+            return;
+        }
+        let idx = self.messages.len().saturating_sub(1);
+        let Some(msg) = self.messages.get(idx).filter(|m| m.role == Role::Assistant) else {
+            return;
+        };
+        let actions = if final_pass {
+            workspace::parse_actions(&msg.content)
+        } else {
+            workspace::completed_actions(&msg.content)
+        };
+        let start = self.streamed_actions;
+        if actions.len() <= start {
+            return;
+        }
+        self.streamed_actions = actions.len();
+        self.apply_actions(idx, &actions, |i| i >= start);
+    }
+
     fn apply_edits(&mut self, msg_idx: usize, only: Option<usize>) {
         let Some(content) = self.messages.get(msg_idx).map(|m| m.content.clone()) else {
             return;
         };
         let actions = workspace::parse_actions(&content);
-        if !actions.iter().any(|a| matches!(a, Action::Edit { .. })) {
+        if !actions
+            .iter()
+            .any(|a| matches!(a, Action::Edit { .. } | Action::Delete(_)))
+        {
             return;
         }
-        let Some(root) = self.project.as_ref().map(|p| p.root.clone()) else {
-            self.status = "Open a project folder to apply edits".into();
-            return;
+        self.apply_actions(msg_idx, &actions, |i| only.map_or(true, |o| o == i));
+    }
+
+    fn apply_actions(&mut self, msg_idx: usize, actions: &[Action], pick: impl Fn(usize) -> bool) {
+        let root = match self.edit_root() {
+            Ok(root) => root,
+            Err(e) => {
+                self.status = e;
+                return;
+            }
         };
 
         let mut set = ChangeSet::new();
         let mut failed = 0;
         for (i, action) in actions.iter().enumerate() {
-            if only.is_some_and(|o| o != i) {
+            if !pick(i) {
                 continue;
             }
-            let Action::Edit { path, hunks } = action else {
-                continue;
-            };
             if matches!(
                 self.action_status.get(&(msg_idx, i)),
                 Some(ActionStatus::Applied(_))
             ) {
                 continue;
             }
-            match workspace::apply_edit(&root, path, hunks) {
+            let result = match action {
+                Action::Edit { path, hunks } => workspace::apply_edit(&root, path, hunks),
+                Action::Delete(path) => workspace::apply_delete(&root, path),
+                Action::Run(_) => continue,
+            };
+            match result {
                 Ok(change) => {
+                    let verb = match (&change.before, &change.after) {
+                        (_, None) => "Deleted",
+                        (None, _) => "Created",
+                        _ => "Modified",
+                    };
+                    self.status = format!("{verb} {} (verified on disk)", change.rel);
                     set.record(change);
                     self.action_status
                         .insert((msg_idx, i), ActionStatus::Applied(set.id));
@@ -2155,15 +2230,58 @@ impl App {
         let files: Vec<String> = set.files.iter().map(|f| f.rel.clone()).collect();
         self.changes.push(set);
         self.after_disk_change(&files);
-        self.status = format!(
-            "Applied edits to {}{}",
-            files.join(", "),
-            if failed > 0 {
-                format!(" ({failed} failed)")
-            } else {
-                String::new()
+        if failed > 0 {
+            self.status = format!("Applied edits to {} ({failed} failed)", files.join(", "));
+        }
+    }
+
+    fn edit_counts(&self, msg_idx: usize) -> (usize, usize) {
+        self.action_status
+            .iter()
+            .filter(|((m, _), _)| *m == msg_idx)
+            .fold((0, 0), |(ok, bad), (_, s)| match s {
+                ActionStatus::Applied(_) => (ok + 1, bad),
+                ActionStatus::Failed(_) => (ok, bad + 1),
+                _ => (ok, bad),
+            })
+    }
+
+    /// Tell the executor which edits failed (with the file's real contents) so it can resend them.
+    fn retry_failed(&mut self, msg_idx: usize) -> Task<Message> {
+        if self.agent_steps >= MAX_AGENT_STEPS {
+            return Task::none();
+        }
+        let Some(content) = self.messages.get(msg_idx).map(|m| m.content.clone()) else {
+            return Task::none();
+        };
+        let mut report = String::new();
+        for (i, action) in workspace::parse_actions(&content).iter().enumerate() {
+            let Some(ActionStatus::Failed(err)) = self.action_status.get(&(msg_idx, i)) else {
+                continue;
+            };
+            let path = match action {
+                Action::Edit { path, .. } | Action::Delete(path) => path,
+                Action::Run(_) => continue,
+            };
+            report.push_str(&format!("- {err}\n"));
+            if let Some(p) = &self.project {
+                if let Ok(text) = p.read(path.trim().trim_start_matches("./")) {
+                    report.push_str(&format!(
+                        "Current contents of {path}:\n```\n{}\n```\n",
+                        terminal::tail(&text, 6000)
+                    ));
+                }
             }
-        );
+        }
+        if report.is_empty() {
+            return Task::none();
+        }
+        self.agent_steps += 1;
+        self.follow_up(format!(
+            "These edits could NOT be applied, so nothing was written for them:\n{report}\n\
+             Resend only the failed edits as edit blocks, copying SEARCH text exactly from the \
+             current contents above."
+        ))
     }
 
     fn revert(&mut self, id: Option<u64>) {
@@ -2306,4 +2424,11 @@ fn expand_home(raw: &str) -> PathBuf {
         }
     }
     PathBuf::from(raw)
+}
+
+fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
 }

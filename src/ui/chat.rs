@@ -6,9 +6,9 @@ use iced::widget::{
 use iced::{Element, Length, Theme};
 
 use super::{markdown, short, style};
-use agent::{ChatMessage, Role};
 use crate::app::{App, Message};
 use crate::icons;
+use agent::{ChatMessage, Role};
 
 pub fn scroll_id() -> scrollable::Id {
     scrollable::Id::new("chat-scroll")
@@ -491,9 +491,9 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
         body = body.push(markdown::view(&msg.content));
     }
 
-    // Edit / run cards, only once the reply has finished streaming.
-    if !active && msg.role == Role::Assistant {
-        if let Some(cards) = super::actions::view(app, index, &msg.content) {
+    // Edit / run cards, shown live while streaming (completed blocks only).
+    if msg.role == Role::Assistant {
+        if let Some(cards) = super::actions::view(app, index, &msg.content, active) {
             body = body.push(cards);
         }
     }

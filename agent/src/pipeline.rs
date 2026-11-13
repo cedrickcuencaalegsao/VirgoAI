@@ -52,21 +52,13 @@ the files that must be READ to plan the request: files to change, files that def
 functions the change touches, and one similar existing feature to copy conventions from. At most \
 8 paths, one per line, exactly as written in the map. No commentary.";
 
-const EDIT_SYSTEM: &str = "You are a code editor. Follow the plan and the user's request. \
-For every change output exactly this format, and nothing else:\n\
-FILE: <relative path>\n\
-<<<<<<< SEARCH\n\
-<existing lines, copied exactly from the file>\n\
-=======\n\
-<new lines>\n\
->>>>>>> REPLACE\n\
-Rules: start every block with a plain line `FILE: path` (no bold, no backticks, no code fences \
-around the output). SEARCH must match the file exactly (including indentation) and be unique in \
-the file. Keep blocks small: change only a few lines each, never the whole file. Use an empty \
-REPLACE section to delete lines. Output only these blocks, no prose.";
+const EDIT_SYSTEM: &str = "You are the execution stage of a coding agent. Every edit block you \
+write is applied to the user's real files the moment the block is complete, so each block must be \
+exact. Follow the plan and the request. Never paste whole files, never describe a change instead \
+of making it, and do not claim a change succeeded: the app reports the real results. Put at most \
+one short sentence before each block.";
 
 const EDIT_PROTOCOL: &str = "# Editing project files\n\
-When the user asks you to change, fix or create code, do NOT paste whole files. \
 Write one fenced block per file, with the info string `edit` followed by the path relative \
 to the project root:\n\
 ````edit src/main.rs\n\
@@ -76,12 +68,13 @@ exact lines copied from the current file\n\
 replacement lines\n\
 >>>>>>> REPLACE\n\
 ```\n\
-Rules: SEARCH must match the current file exactly (copy it, including indentation) and include \
+Rules: SEARCH must match the current file exactly (including indentation) and include \
 2-3 lines of context so it is unique. You may use several SEARCH/REPLACE pairs in one block. \
-To create a new file leave SEARCH empty. To delete lines leave REPLACE empty. Only edit files \
-whose contents were provided. To verify your work you may add a block with the info string `run` \
-containing ONE shell command (for example `cargo check`); the user will approve it and you will \
-receive the output. Keep explanations short.";
+To create a new file leave SEARCH empty. To delete lines leave REPLACE empty. To delete a whole \
+file write a block ```delete path/to/file``` with nothing inside. Only edit files whose contents \
+were provided. To verify your work you may add a block with the info string `run` containing ONE \
+shell command (for example `cargo check`); the user will approve it and you will receive the output.";
+
 
 /// One search/replace block proposed by the model.
 #[derive(Debug, Clone)]

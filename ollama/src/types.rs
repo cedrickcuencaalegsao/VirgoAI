@@ -8,15 +8,24 @@ pub struct ChatMsg {
 
 impl ChatMsg {
     pub fn system(content: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: content.into() }
+        Self {
+            role: "system".into(),
+            content: content.into(),
+        }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: content.into() }
+        Self {
+            role: "user".into(),
+            content: content.into(),
+        }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: content.into() }
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+        }
     }
 }
 
@@ -75,4 +84,54 @@ pub enum StreamEvent {
     Token(String),
     Done,
     Error(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Ollama,
+    OpenAi,
+    Anthropic,
+    Xai,
+}
+
+impl Provider {
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Provider::Ollama => "",
+            Provider::OpenAi => "openai:",
+            Provider::Anthropic => "anthropic:",
+            Provider::Xai => "xai:",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Provider::Ollama => "Ollama",
+            Provider::OpenAi => "OpenAI",
+            Provider::Anthropic => "Anthropic",
+            Provider::Xai => "xAI",
+        }
+    }
+    pub fn default_url(self) -> &'static str {
+        match self {
+            Provider::Ollama => "http://localhost::11434",
+            Provider::OpenAi => "https://api.openai.com/v1",
+            Provider::Anthropic => "https://api.anthropic.com/v1",
+            Provider::Xai => "https://api.x.ai/v1",
+        }
+    }
+    pub fn split(model: &str) -> (Provider, &str) {
+        for p in [Provider::OpenAi, Provider::Anthropic, Provider::Xai] {
+            if let Some(rest) = model.strip_prefix(p.prefix()) {
+                return (p, rest);
+            }
+        }
+        (Provider::Ollama, model)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Endpoint {
+    pub provider: Provider,
+    pub base_url: String,
+    pub api_key: String,
 }

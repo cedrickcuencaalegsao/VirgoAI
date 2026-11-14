@@ -17,7 +17,7 @@ use config::Config;
 use memory::retrieval;
 use memory::store::{self, MemoryStore};
 use ollama::client;
-use ollama::types::{ChatRequest, StreamEvent};
+use ollama::types::{ChatRequest, Provider, StreamEvent};
 use project::Project;
 use workspaces::{self, Workspace};
 
@@ -105,7 +105,7 @@ pub enum Message {
     PlannerSelected(String),
     ExecutorSelected(String),
     RefreshModels,
-    ModelsLoaded(Result<Vec<String>, String>),
+    ModelsLoaded(client::Models),
     RememberLast,
 
     // Memory
@@ -137,6 +137,9 @@ pub enum Message {
     OpenLinkedFolder,
 
     // Settings
+    SettingsOpenAiKeyChanged(String),
+    SettingsAnthropicKeyChanged(String),
+    SettingsXaiKeyChanged(String),
     SettingsUrlChanged(String),
     SettingsMemoryDirChanged(String),
     SettingsNumCtxChanged(String),
@@ -266,7 +269,7 @@ impl App {
         let _ = store.ensure();
         let notes = store.list();
         let num_ctx_input = cfg.num_ctx.to_string();
-        let url = cfg.ollama_url.clone();
+        let endpoints = cfg.endpoints();
         let chat_list = chats::list();
         let project = if cfg.last_project.trim().is_empty() {
             None
@@ -337,7 +340,7 @@ impl App {
             new_knowledge_name: String::new(),
         };
 
-        let task = Task::perform(client::list_models(url), Message::ModelsLoaded);
+        let task = Task::perform(client::list_all_models(endpoints), Message::ModelsLoaded);
         (app, task)
     }
 
@@ -606,13 +609,28 @@ impl App {
                 Task::none()
             }
             Message::RefreshModels => self.refresh_models(),
-            Message::ModelsLoaded(Ok(list)) => {
-                self.status = format!("{} model(s) available", list.len());
-                self.models = list;
+            Message::ModelsLoaded(found) => {
+                let count = found.names.len();
+                self.status = if found.errors.is_empty() {
+                    format!("{count} model(s) available")
+                } else {
+                    format!("{count} model(s) available. {}", found.errors.join(" | "))
+                };
+                if !found.names.is_empty() {
+                    self.models = found.names;
+                }
                 Task::none()
             }
-            Message::ModelsLoaded(Err(error)) => {
-                self.status = error;
+            Message::SettingsOpenAiKeyChanged(v) => {
+                self.cfg.openai_key = v;
+                Task::none()
+            }
+            Message::SettingsAnthropicKeyChanged(v) => {
+                self.cfg.anthropic_key = v;
+                Task::none()
+            }
+            Message::SettingsXaiKeyChanged(v) => {
+                self.cfg.xai_key = v;
                 Task::none()
             }
             Message::RememberLast => {
@@ -737,10 +755,16 @@ impl App {
                 if !models.contains(&self.cfg.executor_model) {
                     models.push(self.cfg.executor_model.clone());
                 }
+                models.retain(|m| Provider::split(m).0 == Provider::Ollama);
+                if models.is_empty() {
+                    self.status =
+                        "Nothing to preload: only local Ollama models can be warmed up".into();
+                    return Task::none();
+                }
                 self.status = format!("Loading {}...", models.join(", "));
                 Task::perform(
                     client::warm_up(
-                        self.cfg.ollama_url.clone(),
+                        self.cfg.endpoint(Provider::Ollama),
                         models,
                         self.cfg.keep_alive.clone(),
                     ),
@@ -1010,10 +1034,19 @@ impl App {
     }
 
     fn spawn_stream(&mut self, request: ChatRequest) -> Task<Message> {
-        let stream = client::chat_stream(self.cfg.ollama_url.clone(), request);
+        let ep = self.cfg.endpoint_for(&request.model);
+        let stream = client::chat_stream(ep, request);
         let (task, handle) = Task::run(stream, Message::Stream).abortable();
         self.abort = Some(handle);
         Task::batch([task, scroll_to_end()])
+    }
+
+    fn refresh_models(&mut self) -> Task<Message> {
+        self.status = "Asking providers for available models...".into();
+        Task::perform(
+            client::list_all_models(self.cfg.endpoints()),
+            Message::ModelsLoaded,
+        )
     }
 
     fn on_stream(&mut self, event: StreamEvent) -> Task<Message> {
@@ -1275,10 +1308,10 @@ impl App {
             self.cfg.executor_model,
             line + 1
         );
-        Task::perform(
-            client::chat_once(self.cfg.ollama_url.clone(), request),
-            move |result| Message::SuggestionReady(rel.clone(), line, result),
-        )
+        let ep = self.cfg.endpoint_for(&request.model);
+        Task::perform(client::chat_once(ep, request), move |result| {
+            Message::SuggestionReady(rel.clone(), line, result)
+        })
     }
 
     fn on_suggestion(&mut self, rel: String, line: usize, result: Result<String, String>) {
@@ -1614,16 +1647,6 @@ impl App {
         }
     }
 
-    // ---- misc helpers -----------------------------------------------------
-
-    fn refresh_models(&mut self) -> Task<Message> {
-        self.status = "Asking Ollama for installed models...".into();
-        Task::perform(
-            client::list_models(self.cfg.ollama_url.clone()),
-            Message::ModelsLoaded,
-        )
-    }
-
     fn persist(&mut self) {
         if let Err(e) = self.cfg.save() {
             self.status = format!("Could not save config: {e}");
@@ -1780,11 +1803,9 @@ impl App {
         self.begin_stage(Phase::Scouting);
         self.status = format!("Scanning the project with {}...", self.cfg.planner_model);
 
-        let (task, handle) = Task::perform(
-            client::chat_once(self.cfg.ollama_url.clone(), request),
-            Message::ScoutDone,
-        )
-        .abortable();
+        let ep = self.cfg.endpoint_for(&request.model);
+        let (task, handle) =
+            Task::perform(client::chat_once(ep, request), Message::ScoutDone).abortable();
         self.abort = Some(handle);
         task
     }

@@ -2,7 +2,6 @@ use iced::alignment::Vertical;
 use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
 
-use super::style;
 use app::{App, Message};
 use config::Config;
 
@@ -32,7 +31,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .padding(9)
                 .style(style::field),
         ),
-                text("External AI providers").size(15).font(style::bold()),
+        text("External AI providers").size(15).font(style::bold()),
         text(
             "Keys are saved in config.toml (empty = disabled). After saving, their models \
              appear in the Planner/Executor pickers as openai:, anthropic: and xai:."

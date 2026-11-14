@@ -4,11 +4,14 @@ use iced::widget::{
 };
 use iced::{Element, Font, Length};
 
-use super::style;
 use app::{App, Message};
 
 pub fn view(app: &App) -> Element<'_, Message> {
-    let project = app.project.as_ref().map(|p| p.name.as_str()).unwrap_or("no project open");
+    let project = app
+        .project
+        .as_ref()
+        .map(|p| p.name.as_str())
+        .unwrap_or("no project open");
 
     let header = row![
         icon_manager::tint(icon_manager::terminal(), 16.0, icon_manager::accent()),
@@ -19,10 +22,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .padding([4, 8])
             .on_press(Message::TermClear)
             .style(style::ghost_button),
-        button(icon_manager::tint(icon_manager::x(), 14.0, icon_manager::muted()))
-            .padding(6)
-            .on_press(Message::ToggleTerminal)
-            .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::x(),
+            14.0,
+            icon_manager::muted()
+        ))
+        .padding(6)
+        .on_press(Message::ToggleTerminal)
+        .style(style::ghost_button),
     ]
     .spacing(8)
     .align_y(Vertical::Center);
@@ -33,7 +40,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .style(style::dim)
             .into()
     } else {
-        text(app.term_log.as_str()).font(Font::MONOSPACE).size(12).into()
+        text(app.term_log.as_str())
+            .font(Font::MONOSPACE)
+            .size(12)
+            .into()
     };
 
     let output = container(
@@ -58,7 +68,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .style(style::field),
         button(icon_manager::label(
             icon_manager::play(),
-            if app.term_running { "Running..." } else { "Run" },
+            if app.term_running {
+                "Running..."
+            } else {
+                "Run"
+            },
             13,
             icon_manager::on_primary()
         ))

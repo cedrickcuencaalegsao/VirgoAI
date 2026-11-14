@@ -2,7 +2,7 @@ use iced::alignment::Vertical;
 use iced::widget::{button, column, container, row, scrollable, text, Space, Svg};
 use iced::{Element, Length};
 
-use super::{short, style};
+use super::short;
 use app::{App, Message, Screen};
 use workspaces::Workspace;
 

@@ -6,7 +6,6 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 
-use super::style;
 use app::{App, Message};
 use project::{Entry, Project};
 

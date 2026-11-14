@@ -1,10 +1,10 @@
 [package]
 name = "virgo_gui"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.13", features = ["tokio", "svg"] }
+iced = { version = "0.13", features = ["tokio", "svg", "canvas"] }
 icon_manager = { path = "../icon_manager" }
 workspace = { path = "../workspace" }
 workspaces = { path = "../workspaces" }
@@ -14,4 +14,6 @@ code = { path = "../code" }
 project = { path = "../project" }
 config = { path = "../config" }
 chats = { path = "../chats" }
-shared = {path = "../shared"}
+shared = { path = "../shared" }
+memory = { path = "../memory" }
+style = { path = "../style" }

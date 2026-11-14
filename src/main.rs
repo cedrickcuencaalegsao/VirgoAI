@@ -73,7 +73,7 @@ fn view(app: &App) -> Element<'_, Message> {
 
     let footer = text(app.status.as_str())
         .size(12)
-        .style(virgo_gui::style::dim);
+        .style(style::dim);
 
     let content = column![container(page).height(Length::Fill), footer]
         .spacing(8)

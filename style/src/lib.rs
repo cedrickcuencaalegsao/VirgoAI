@@ -53,7 +53,7 @@ pub fn on_gold() -> Color {
     bg()
 }
 
-fn alpha(color: Color, a: f32) -> Color {
+pub fn alpha(color: Color, a: f32) -> Color {
     Color { a, ..color }
 }
 
@@ -509,4 +509,84 @@ pub fn pick(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
         radius: R_CONTROL.into(),
     };
     style
+}
+
+
+
+// ---------------------------------------------------------------------------
+// Memory map
+// ---------------------------------------------------------------------------
+
+/// Colour of a note group (folder). Stable for a given group index.
+pub fn group_color(i: usize) -> Color {
+    const PALETTE: [(u8, u8, u8); 6] = [
+        (0xFC, 0xA3, 0x11), // gold
+        (0x5F, 0xD3, 0xA4), // mint
+        (0x6C, 0xA8, 0xFF), // blue
+        (0xC0, 0x84, 0xFC), // violet
+        (0xF0, 0x62, 0x6A), // coral
+        (0x4F, 0xD1, 0xE0), // cyan
+    ];
+    let (r, g, b) = PALETTE[i % PALETTE.len()];
+    Color::from_rgb8(r, g, b)
+}
+
+/// Small round colour marker.
+pub fn dot(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_theme: &Theme| container::Style {
+        background: Some(Background::Color(color)),
+        border: Border {
+            radius: 999.0.into(),
+            ..Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+/// The dark area the map is drawn on.
+pub fn map_area(_theme: &Theme) -> container::Style {
+    layer(bg(), line(), 16.0, Shadow::default())
+}
+
+/// Small number box (Notes / Links / Words).
+pub fn stat_pill(_theme: &Theme) -> container::Style {
+    layer(alpha(Color::WHITE, 0.04), line(), R_CONTROL, Shadow::default())
+}
+
+/// A note in the list: soft card, gold outline when selected.
+pub fn note_card(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme: &Theme, status: button::Status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let (fill, outline) = match (active, hovered) {
+            (true, _) => (alpha(gold(), 0.12), alpha(gold(), 0.50)),
+            (false, true) => (alpha(Color::WHITE, 0.07), alpha(Color::WHITE, 0.12)),
+            (false, false) => (alpha(Color::WHITE, 0.03), line()),
+        };
+        button::Style {
+            background: Some(Background::Color(fill)),
+            text_color: theme.palette().text,
+            border: Border { color: outline, width: 1.0, radius: R_CONTROL.into() },
+            shadow: Shadow::default(),
+        }
+    }
+}
+
+/// Filter pill above the note list.
+pub fn filter_chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |theme: &Theme, status: button::Status| {
+        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
+        let (fill, text_color, outline) = if active {
+            (gold(), on_gold(), Color::TRANSPARENT)
+        } else if hovered {
+            (alpha(Color::WHITE, 0.08), theme.palette().text, line())
+        } else {
+            (alpha(Color::WHITE, 0.04), alpha(theme.palette().text, 0.75), line())
+        };
+        button::Style {
+            background: Some(Background::Color(fill)),
+            text_color,
+            border: Border { color: outline, width: 1.0, radius: 999.0.into() },
+            shadow: Shadow::default(),
+        }
+    }
 }

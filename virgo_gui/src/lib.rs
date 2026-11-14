@@ -7,7 +7,6 @@ pub mod nav;
 pub mod project_panel;
 pub mod settings;
 pub mod sidebar;
-pub mod style;
 pub mod terminal_panel;
 pub mod workspaces;
 

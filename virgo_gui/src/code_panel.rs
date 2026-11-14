@@ -9,7 +9,7 @@ use iced::widget::{
 };
 use iced::{Element, Font, Length, Theme};
 
-use super::{short, style};
+use super::short;
 use app::{App, Message};
 use code::{self, CodeDoc, RowKind, RowRef};
 
@@ -20,7 +20,6 @@ const OVERSCAN: usize = 12;
 const GUTTER_W: f32 = 40.0;
 const MARKER_W: f32 = 12.0;
 const ACTIONS_W: f32 = 56.0;
-
 
 pub fn view(app: &App) -> Element<'_, Message> {
     match &app.code {
@@ -183,17 +182,25 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
             icon_manager::muted()
         };
         let mut buttons = row![
-            button(icon_manager::tint(icon_manager::lightbulb(), 13.0, bulb_color))
-                .padding([5, 6])
-                .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
-                .style(style::ghost_button)
+            button(icon_manager::tint(
+                icon_manager::lightbulb(),
+                13.0,
+                bulb_color
+            ))
+            .padding([5, 6])
+            .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
+            .style(style::ghost_button)
         ];
         if kind == RowKind::Removed {
             buttons = buttons.push(
-                button(icon_manager::tint(icon_manager::undo_2(), 13.0, icon_manager::muted()))
-                    .padding([5, 6])
-                    .on_press(Message::RevertLine(r.line))
-                    .style(style::ghost_button),
+                button(icon_manager::tint(
+                    icon_manager::undo_2(),
+                    13.0,
+                    icon_manager::muted(),
+                ))
+                .padding([5, 6])
+                .on_press(Message::RevertLine(r.line))
+                .style(style::ghost_button),
             );
         }
         container(buttons).width(Length::Fixed(ACTIONS_W)).into()

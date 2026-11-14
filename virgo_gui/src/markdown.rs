@@ -7,7 +7,6 @@ use iced::widget::{
 };
 use iced::{Element, Font, Length};
 
-use super::style;
 use app::Message;
 
 enum Block {
@@ -38,7 +37,10 @@ pub fn view<'a>(src: &str) -> Element<'a, Message> {
 
 fn block_view<'a>(block: Block) -> Element<'a, Message> {
     match block {
-        Block::Heading { level, text: content } => {
+        Block::Heading {
+            level,
+            text: content,
+        } => {
             let size = match level {
                 1 => 26,
                 2 => 21,
@@ -47,7 +49,10 @@ fn block_view<'a>(block: Block) -> Element<'a, Message> {
             };
             text(content).size(size).font(style::bold()).into()
         }
-        Block::Item { marker, text: content } => row![
+        Block::Item {
+            marker,
+            text: content,
+        } => row![
             text(marker).size(15).width(Length::Fixed(24.0)),
             inline_view(&content),
         ]
@@ -60,25 +65,32 @@ fn block_view<'a>(block: Block) -> Element<'a, Message> {
 }
 
 fn code_view<'a>(lang: String, code: String) -> Element<'a, Message> {
-    let label = if lang.is_empty() { "code".to_string() } else { lang };
+    let label = if lang.is_empty() {
+        "code".to_string()
+    } else {
+        lang
+    };
 
     let header = row![
         text(label).size(11).style(style::dim),
         horizontal_space(),
-        button(icon_manager::label(icon_manager::copy(), "Copy", 11, icon_manager::muted()))
-            .padding([3, 10])
-            .on_press(Message::Copy(code.clone()))
-            .style(style::ghost_button),
+        button(icon_manager::label(
+            icon_manager::copy(),
+            "Copy",
+            11,
+            icon_manager::muted()
+        ))
+        .padding([3, 10])
+        .on_press(Message::Copy(code.clone()))
+        .style(style::ghost_button),
     ]
     .align_y(iced::alignment::Vertical::Center);
 
-    container(
-        column![header, text(code).font(Font::MONOSPACE).size(13)].spacing(8),
-    )
-    .padding(12)
-    .width(Length::Fill)
-    .style(style::code_block)
-    .into()
+    container(column![header, text(code).font(Font::MONOSPACE).size(13)].spacing(8))
+        .padding(12)
+        .width(Length::Fill)
+        .style(style::code_block)
+        .into()
 }
 
 fn inline_view<'a>(src: &str) -> Element<'a, Message> {
@@ -132,16 +144,25 @@ fn parse(src: &str) -> Vec<Block> {
             flush(&mut para, &mut blocks);
         } else if let Some((level, rest)) = heading(trimmed) {
             flush(&mut para, &mut blocks);
-            blocks.push(Block::Heading { level, text: rest.to_string() });
+            blocks.push(Block::Heading {
+                level,
+                text: rest.to_string(),
+            });
         } else if is_rule(trimmed) {
             flush(&mut para, &mut blocks);
             blocks.push(Block::Rule);
         } else if let Some(rest) = bullet(trimmed) {
             flush(&mut para, &mut blocks);
-            blocks.push(Block::Item { marker: "\u{2022}".to_string(), text: rest.to_string() });
+            blocks.push(Block::Item {
+                marker: "\u{2022}".to_string(),
+                text: rest.to_string(),
+            });
         } else if let Some((marker, rest)) = numbered(trimmed) {
             flush(&mut para, &mut blocks);
-            blocks.push(Block::Item { marker, text: rest.to_string() });
+            blocks.push(Block::Item {
+                marker,
+                text: rest.to_string(),
+            });
         } else {
             para.push(line);
         }
@@ -149,7 +170,10 @@ fn parse(src: &str) -> Vec<Block> {
 
     // A code fence that is still open (the reply is streaming).
     if in_code {
-        blocks.push(Block::Code { lang, code: code.join("\n") });
+        blocks.push(Block::Code {
+            lang,
+            code: code.join("\n"),
+        });
     }
     flush(&mut para, &mut blocks);
     blocks
@@ -190,7 +214,9 @@ fn numbered(line: &str) -> Option<(String, &str)> {
         return None;
     }
     let rest = &line[digits..];
-    let rest = rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))?;
+    let rest = rest
+        .strip_prefix(". ")
+        .or_else(|| rest.strip_prefix(") "))?;
     Some((format!("{}.", &line[..digits]), rest))
 }
 

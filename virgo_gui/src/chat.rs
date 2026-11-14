@@ -1,15 +1,15 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text_editor::{Binding, Status};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
-    text_editor, Space,
+    Space, button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
+    text_editor,
 };
-use iced::{keyboard, Element, Length, Theme};
+use iced::{Element, Length, Theme, keyboard};
 
-use super::{markdown, short, style};
+use super::{markdown, short};
+use agent::{ChatMessage, Role};
 use app::{App, Message};
 use icon_manager;
-use agent::{ChatMessage, Role};
 
 pub fn scroll_id() -> scrollable::Id {
     scrollable::Id::new("chat-scroll")
@@ -93,18 +93,30 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(2),
         horizontal_space(),
         back,
-        button(icon_manager::tint(icon_manager::refresh_cw(), 16.0, icon_manager::muted()))
-            .padding(8)
-            .on_press(Message::RefreshModels)
-            .style(style::ghost_button),
-        button(icon_manager::tint(icon_manager::terminal(), 18.0, terminal_color))
-            .padding(8)
-            .on_press(Message::ToggleTerminal)
-            .style(style::ghost_button),
-        button(icon_manager::tint(icon_manager::panel_right(), 18.0, panel_color))
-            .padding(8)
-            .on_press(Message::TogglePanel)
-            .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::refresh_cw(),
+            16.0,
+            icon_manager::muted()
+        ))
+        .padding(8)
+        .on_press(Message::RefreshModels)
+        .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::terminal(),
+            18.0,
+            terminal_color
+        ))
+        .padding(8)
+        .on_press(Message::ToggleTerminal)
+        .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::panel_right(),
+            18.0,
+            panel_color
+        ))
+        .padding(8)
+        .on_press(Message::TogglePanel)
+        .style(style::ghost_button),
     ]
     .spacing(6)
     .align_y(Vertical::Center);
@@ -171,17 +183,25 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // Round, icon-only action button.
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {
-        button(icon_manager::tint(icon_manager::square(), 16.0, icon_manager::on_danger()))
-            .padding(12)
-            .on_press(Message::Stop)
-            .style(style::stop_button)
-            .into()
+        button(icon_manager::tint(
+            icon_manager::square(),
+            16.0,
+            icon_manager::on_danger(),
+        ))
+        .padding(12)
+        .on_press(Message::Stop)
+        .style(style::stop_button)
+        .into()
     } else {
-        button(icon_manager::tint(icon_manager::send(), 16.0, icon_manager::on_primary()))
-            .padding(12)
-            .on_press_maybe(can_send.then_some(Message::Send))
-            .style(style::send_button)
-            .into()
+        button(icon_manager::tint(
+            icon_manager::send(),
+            16.0,
+            icon_manager::on_primary(),
+        ))
+        .padding(12)
+        .on_press_maybe(can_send.then_some(Message::Send))
+        .style(style::send_button)
+        .into()
     };
 
     let placeholder = if app.project.is_some() {
@@ -340,9 +360,13 @@ fn attachments(app: &App) -> Option<Element<'_, Message>> {
         return None;
     }
 
-    let mut chips = row![icon_manager::tint(icon_manager::paperclip(), 14.0, icon_manager::accent())]
-        .spacing(6)
-        .align_y(Vertical::Center);
+    let mut chips = row![icon_manager::tint(
+        icon_manager::paperclip(),
+        14.0,
+        icon_manager::accent()
+    )]
+    .spacing(6)
+    .align_y(Vertical::Center);
 
     for rel in app.attached.iter().take(3) {
         let name = rel.rsplit('/').next().unwrap_or(rel);
@@ -402,12 +426,17 @@ fn suggestions(app: &App) -> Option<Element<'_, Message>> {
         } else {
             icon_manager::file_text()
         };
-        button(icon_manager::label(icon, entry.rel.as_str(), 13, icon_manager::muted()))
-            .width(Length::Fill)
-            .padding([6, 10])
-            .on_press(Message::PickMention(entry.rel.clone()))
-            .style(style::nav_item(false))
-            .into()
+        button(icon_manager::label(
+            icon,
+            entry.rel.as_str(),
+            13,
+            icon_manager::muted(),
+        ))
+        .width(Length::Fill)
+        .padding([6, 10])
+        .on_press(Message::PickMention(entry.rel.clone()))
+        .style(style::nav_item(false))
+        .into()
     }))
     .spacing(2);
 
@@ -517,10 +546,15 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
             .style(style::accent),
         text(model).size(11).style(style::dim),
         horizontal_space(),
-        button(icon_manager::label(icon_manager::copy(), "Copy", 11, icon_manager::muted()))
-            .padding([3, 10])
-            .on_press_maybe((!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone())))
-            .style(style::ghost_button),
+        button(icon_manager::label(
+            icon_manager::copy(),
+            "Copy",
+            11,
+            icon_manager::muted()
+        ))
+        .padding([3, 10])
+        .on_press_maybe((!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone())))
+        .style(style::ghost_button),
     ]
     .spacing(8)
     .align_y(Vertical::Center);

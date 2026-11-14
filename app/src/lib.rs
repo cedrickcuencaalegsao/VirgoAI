@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use iced::widget::{ scrollable, text_editor};
+use iced::widget::{scrollable, text_editor};
 use iced::{Subscription, Task, Theme};
 
 use terminal::{self, RunResult};
@@ -13,8 +13,8 @@ use agent::{ChatMessage, Role};
 use chats::{self, Chat, ChatSummary};
 use code::CodeDoc;
 use config::Config;
-use memory::retrieval;
 use memory::store::{self, MemoryStore};
+use memory::{graph::Graph, retrieval};
 use ollama::client;
 use ollama::types::{ChatRequest, Provider, StreamEvent};
 use project::Project;
@@ -116,6 +116,11 @@ pub enum Message {
     DeleteNote,
     NewNoteNameChanged(String),
     CreateNote,
+    MemoryQueryChanged(String),
+    MemoryFilter(Option<usize>),
+    MemoryHover(Option<usize>),
+    MemoryNodeClicked(usize),
+    MemoryClose,
 
     // Projects
     NewWorkspaceNameChanged(String),
@@ -260,6 +265,11 @@ pub struct App {
     pub term_running: bool,
     pub agent_steps: u8,
     pub streamed_actions: usize,
+
+    pub memory_graph: Graph,
+    pub memory_query: String,
+    pub memory_filter: Option<usize>,
+    pub memory_hover: Option<usize>,
 }
 
 impl App {
@@ -278,6 +288,7 @@ impl App {
             Project::scan(PathBuf::from(&cfg.last_project)).ok()
         };
         let workspace_list = workspaces::list();
+        let memory_graph = Graph::build(&store.load_all());
 
         let app = App {
             cfg,
@@ -340,6 +351,10 @@ impl App {
             selected_ws_note: None,
             ws_editor: text_editor::Content::new(),
             new_knowledge_name: String::new(),
+            memory_graph,
+            memory_query: String::new(),
+            memory_filter: None,
+            memory_hover: None,
         };
 
         let task = Task::perform(client::list_all_models(endpoints), Message::ModelsLoaded);
@@ -692,6 +707,7 @@ impl App {
                         Err(e) => format!("Could not save {name}: {e}"),
                     };
                 }
+                self.rebuild_graph();
                 Task::none()
             }
             Message::DeleteNote => {
@@ -913,6 +929,30 @@ impl App {
             Message::ToggleAutoApply(v) => {
                 self.cfg.auto_apply = v;
                 self.persist();
+                Task::none()
+            }
+            Message::MemoryQueryChanged(value) => {
+                self.memory_query = value;
+                Task::none()
+            }
+            Message::MemoryFilter(group) => {
+                self.memory_filter = group;
+                Task::none()
+            }
+            Message::MemoryHover(node) => {
+                self.memory_hover = node;
+                Task::none()
+            }
+            Message::MemoryNodeClicked(index) => {
+                let name = self.memory_graph.nodes.get(index).map(|n| n.name.clone());
+                if let Some(name) = name {
+                    self.select_note(name);
+                }
+                Task::none()
+            }
+            Message::MemoryClose => {
+                self.selected_note = None;
+                self.editor = text_editor::Content::new();
                 Task::none()
             }
         }
@@ -1277,10 +1317,7 @@ impl App {
                 self.suggest_line = None;
                 self.suggest_input.clear();
                 self.suggesting = None;
-                scrollable::snap_to(
-                    shared::code_scroll_id(),
-                    scrollable::RelativeOffset::START,
-                )
+                scrollable::snap_to(shared::code_scroll_id(), scrollable::RelativeOffset::START)
             }
             Err(e) => {
                 self.status = e;
@@ -2379,6 +2416,11 @@ impl App {
         );
         // Skip the planner for these follow-up turns to keep the loop fast.
         Task::batch([scroll, self.follow_up(feedback)])
+    }
+
+    fn rebuild_graph(&mut self) {
+        self.memory_graph = Graph::build(&self.store.load_all());
+        self.memory_hover = None;
     }
 }
 

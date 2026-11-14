@@ -10,10 +10,10 @@ use iced::widget::{
 };
 use iced::{Element, Length};
 
-use super::{short, style};
+use super::short;
 use app::{App, Message, Screen};
 use chats::{self, ChatSummary};
-use workspaces::{Workspace, PROJECT_NOTE};
+use workspaces::{PROJECT_NOTE, Workspace};
 
 pub fn view(app: &App) -> Element<'_, Message> {
     match (app.screen, app.selected_workspace.as_deref()) {
@@ -57,10 +57,15 @@ fn list(app: &App) -> Element<'_, Message> {
             .padding(9)
             .size(14)
             .style(style::field),
-        button(icon_manager::label(icon_manager::plus(), "New project", 13, icon_manager::on_primary()))
-            .padding([9, 14])
-            .on_press(Message::CreateWorkspace)
-            .style(style::primary_button),
+        button(icon_manager::label(
+            icon_manager::plus(),
+            "New project",
+            13,
+            icon_manager::on_primary()
+        ))
+        .padding([9, 14])
+        .on_press(Message::CreateWorkspace)
+        .style(style::primary_button),
     ]
     .spacing(6);
 
@@ -130,15 +135,24 @@ fn center<'a>(app: &'a App, slug: &'a str) -> Element<'a, Message> {
     let confirming = app.confirm_delete.as_deref() == Some(slug);
 
     let delete = if confirming {
-        button(icon_manager::label(icon_manager::trash_2(), "Confirm delete", 12, icon_manager::on_danger()))
-            .padding([6, 12])
-            .on_press(Message::DeleteWorkspace(slug.to_string()))
-            .style(style::danger_button)
+        button(icon_manager::label(
+            icon_manager::trash_2(),
+            "Confirm delete",
+            12,
+            icon_manager::on_danger(),
+        ))
+        .padding([6, 12])
+        .on_press(Message::DeleteWorkspace(slug.to_string()))
+        .style(style::danger_button)
     } else {
-        button(icon_manager::tint(icon_manager::trash_2(), 15.0, icon_manager::muted()))
-            .padding(8)
-            .on_press(Message::DeleteWorkspace(slug.to_string()))
-            .style(style::ghost_button)
+        button(icon_manager::tint(
+            icon_manager::trash_2(),
+            15.0,
+            icon_manager::muted(),
+        ))
+        .padding(8)
+        .on_press(Message::DeleteWorkspace(slug.to_string()))
+        .style(style::ghost_button)
     };
 
     let header = row![
@@ -179,10 +193,15 @@ fn workspace_body<'a>(app: &'a App, slug: &'a str) -> Element<'a, Message> {
                 .padding(14)
                 .size(16)
                 .style(style::composer_input),
-            button(icon_manager::label(icon_manager::send(), "Start", 14, icon_manager::on_primary()))
-                .padding([10, 18])
-                .on_press_maybe(can_send.then_some(Message::ProjectSend))
-                .style(style::primary_button),
+            button(icon_manager::label(
+                icon_manager::send(),
+                "Start",
+                14,
+                icon_manager::on_primary()
+            ))
+            .padding([10, 18])
+            .on_press_maybe(can_send.then_some(Message::ProjectSend))
+            .style(style::primary_button),
         ]
         .spacing(8)
         .align_y(Vertical::Center),
@@ -270,10 +289,14 @@ fn conversation_row<'a>(app: &'a App, c: &'a ChatSummary) -> Element<'a, Message
         .padding([10, 12])
         .on_press_maybe(enabled.then(|| Message::OpenChat(c.id.clone())))
         .style(style::nav_item(active)),
-        button(icon_manager::tint(icon_manager::trash_2(), 14.0, icon_manager::muted()))
-            .padding([7, 8])
-            .on_press_maybe(enabled.then(|| Message::DeleteChat(c.id.clone())))
-            .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::trash_2(),
+            14.0,
+            icon_manager::muted()
+        ))
+        .padding([7, 8])
+        .on_press_maybe(enabled.then(|| Message::DeleteChat(c.id.clone())))
+        .style(style::ghost_button),
     ]
     .spacing(2)
     .align_y(Vertical::Center)
@@ -416,10 +439,15 @@ fn side_panel(app: &App) -> Element<'_, Message> {
         );
     }
     buttons = buttons.push(
-        button(icon_manager::label(icon_manager::folder_open(), "Browse", 12, icon_manager::muted()))
-            .padding([6, 10])
-            .on_press(Message::OpenFolder)
-            .style(style::ghost_button),
+        button(icon_manager::label(
+            icon_manager::folder_open(),
+            "Browse",
+            12,
+            icon_manager::muted(),
+        ))
+        .padding([6, 10])
+        .on_press(Message::OpenFolder)
+        .style(style::ghost_button),
     );
 
     let mut context = column![
@@ -441,10 +469,12 @@ fn side_panel(app: &App) -> Element<'_, Message> {
             .style(style::dim),
     );
 
-    container(scrollable(column![instructions, knowledge, context].spacing(22)))
-        .padding(16)
-        .width(Length::Fixed(320.0))
-        .height(Length::Fill)
-        .style(style::card)
-        .into()
+    container(scrollable(
+        column![instructions, knowledge, context].spacing(22),
+    ))
+    .padding(16)
+    .width(Length::Fixed(320.0))
+    .height(Length::Fill)
+    .style(style::card)
+    .into()
 }

@@ -2,7 +2,7 @@ use iced::alignment::Vertical;
 use iced::widget::{button, column, container, horizontal_space, row, text};
 use iced::{Element, Font, Length, Theme};
 
-use super::{short, style};
+use super::short;
 use app::{ActionStatus, App, Message};
 
 use icon_manager;
@@ -100,10 +100,15 @@ fn edit_card<'a>(
             header = header
                 .push(text("Applied").size(12).style(style::success))
                 .push(
-                    button(icon_manager::label(icon_manager::undo_2(), "Revert", 12, icon_manager::muted()))
-                        .padding([5, 10])
-                        .on_press(Message::RevertChange(*id))
-                        .style(style::ghost_button),
+                    button(icon_manager::label(
+                        icon_manager::undo_2(),
+                        "Revert",
+                        12,
+                        icon_manager::muted(),
+                    ))
+                    .padding([5, 10])
+                    .on_press(Message::RevertChange(*id))
+                    .style(style::ghost_button),
                 );
         }
         _ => {
@@ -198,10 +203,15 @@ fn run_card<'a>(
                 .size(13)
                 .width(Length::Fill),
             text(note).size(12).style(style::dim),
-            button(icon_manager::label(icon_manager::play(), label, 12, icon_manager::on_primary()))
-                .padding([5, 12])
-                .on_press_maybe(can_run.then_some(Message::RunAction(msg_idx, i)))
-                .style(style::primary_button),
+            button(icon_manager::label(
+                icon_manager::play(),
+                label,
+                12,
+                icon_manager::on_primary()
+            ))
+            .padding([5, 12])
+            .on_press_maybe(can_run.then_some(Message::RunAction(msg_idx, i)))
+            .style(style::primary_button),
         ]
         .spacing(8)
         .align_y(Vertical::Center),
@@ -231,16 +241,30 @@ fn delete_card<'a>(
         Some(ActionStatus::Applied(id)) => header
             .push(text("Deleted").size(12).style(style::success))
             .push(
-                button(icon_manager::label(icon_manager::undo_2(), "Revert", 12, icon_manager::muted()))
-                    .padding([5, 10])
-                    .on_press(Message::RevertChange(*id))
-                    .style(style::ghost_button),
+                button(icon_manager::label(
+                    icon_manager::undo_2(),
+                    "Revert",
+                    12,
+                    icon_manager::muted(),
+                ))
+                .padding([5, 10])
+                .on_press(Message::RevertChange(*id))
+                .style(style::ghost_button),
             ),
         _ => header.push(
-            button(icon_manager::label(icon_manager::check(), "Apply", 12, icon_manager::on_primary()))
-                .padding([5, 12])
-                .on_press_maybe(app.project.is_some().then_some(Message::ApplyAction(msg_idx, i)))
-                .style(style::primary_button),
+            button(icon_manager::label(
+                icon_manager::check(),
+                "Apply",
+                12,
+                icon_manager::on_primary(),
+            ))
+            .padding([5, 12])
+            .on_press_maybe(
+                app.project
+                    .is_some()
+                    .then_some(Message::ApplyAction(msg_idx, i)),
+            )
+            .style(style::primary_button),
         ),
     };
 
@@ -248,5 +272,9 @@ fn delete_card<'a>(
     if let Some(ActionStatus::Failed(error)) = status {
         body = body.push(text(error.clone()).size(12).style(style::danger_text));
     }
-    container(body).padding(10).width(Length::Fill).style(style::code_block).into()
+    container(body)
+        .padding(10)
+        .width(Length::Fill)
+        .style(style::code_block)
+        .into()
 }

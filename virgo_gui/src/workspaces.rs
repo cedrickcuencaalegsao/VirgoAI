@@ -11,9 +11,8 @@ use iced::widget::{
 use iced::{Element, Length};
 
 use super::{short, style};
-use crate::app::{App, Message, Screen};
+use app::{App, Message, Screen};
 use chats::{self, ChatSummary};
-use crate::icons;
 use workspaces::{Workspace, PROJECT_NOTE};
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -40,7 +39,7 @@ fn ago(updated: u64) -> String {
 fn list(app: &App) -> Element<'_, Message> {
     let header = column![
         row![
-            icons::tint(icons::folder_kanban(), 20.0, icons::accent()),
+            icon_manager::tint(icon_manager::folder_kanban(), 20.0, icon_manager::accent()),
             text("Projects").size(24).font(style::bold()),
         ]
         .spacing(8)
@@ -58,7 +57,7 @@ fn list(app: &App) -> Element<'_, Message> {
             .padding(9)
             .size(14)
             .style(style::field),
-        button(icons::label(icons::plus(), "New project", 13, icons::on_primary()))
+        button(icon_manager::label(icon_manager::plus(), "New project", 13, icon_manager::on_primary()))
             .padding([9, 14])
             .on_press(Message::CreateWorkspace)
             .style(style::primary_button),
@@ -96,7 +95,7 @@ fn card<'a>(app: &'a App, w: &'a Workspace) -> Element<'a, Message> {
 
     button(
         row![
-            icons::tint(icons::folder_kanban(), 18.0, icons::accent()),
+            icon_manager::tint(icon_manager::folder_kanban(), 18.0, icon_manager::accent()),
             column![
                 text(short(&w.name, 40)).size(15).font(style::bold()),
                 text(format!("{count} conversation(s) · {last}"))
@@ -131,12 +130,12 @@ fn center<'a>(app: &'a App, slug: &'a str) -> Element<'a, Message> {
     let confirming = app.confirm_delete.as_deref() == Some(slug);
 
     let delete = if confirming {
-        button(icons::label(icons::trash_2(), "Confirm delete", 12, icons::on_danger()))
+        button(icon_manager::label(icon_manager::trash_2(), "Confirm delete", 12, icon_manager::on_danger()))
             .padding([6, 12])
             .on_press(Message::DeleteWorkspace(slug.to_string()))
             .style(style::danger_button)
     } else {
-        button(icons::tint(icons::trash_2(), 15.0, icons::muted()))
+        button(icon_manager::tint(icon_manager::trash_2(), 15.0, icon_manager::muted()))
             .padding(8)
             .on_press(Message::DeleteWorkspace(slug.to_string()))
             .style(style::ghost_button)
@@ -180,7 +179,7 @@ fn workspace_body<'a>(app: &'a App, slug: &'a str) -> Element<'a, Message> {
                 .padding(14)
                 .size(16)
                 .style(style::composer_input),
-            button(icons::label(icons::send(), "Start", 14, icons::on_primary()))
+            button(icon_manager::label(icon_manager::send(), "Start", 14, icon_manager::on_primary()))
                 .padding([10, 18])
                 .on_press_maybe(can_send.then_some(Message::ProjectSend))
                 .style(style::primary_button),
@@ -259,7 +258,7 @@ fn conversation_row<'a>(app: &'a App, c: &'a ChatSummary) -> Element<'a, Message
     row![
         button(
             row![
-                icons::tint(icons::message_square(), 15.0, icons::muted()),
+                icon_manager::tint(icon_manager::message_square(), 15.0, icon_manager::muted()),
                 text(short(&c.title, 60)).size(14),
                 horizontal_space(),
                 text(ago(c.updated)).size(12).style(style::dim),
@@ -271,7 +270,7 @@ fn conversation_row<'a>(app: &'a App, c: &'a ChatSummary) -> Element<'a, Message
         .padding([10, 12])
         .on_press_maybe(enabled.then(|| Message::OpenChat(c.id.clone())))
         .style(style::nav_item(active)),
-        button(icons::tint(icons::trash_2(), 14.0, icons::muted()))
+        button(icon_manager::tint(icon_manager::trash_2(), 14.0, icon_manager::muted()))
             .padding([7, 8])
             .on_press_maybe(enabled.then(|| Message::DeleteChat(c.id.clone())))
             .style(style::ghost_button),
@@ -417,7 +416,7 @@ fn side_panel(app: &App) -> Element<'_, Message> {
         );
     }
     buttons = buttons.push(
-        button(icons::label(icons::folder_open(), "Browse", 12, icons::muted()))
+        button(icon_manager::label(icon_manager::folder_open(), "Browse", 12, icon_manager::muted()))
             .padding([6, 10])
             .on_press(Message::OpenFolder)
             .style(style::ghost_button),

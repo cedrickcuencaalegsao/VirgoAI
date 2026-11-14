@@ -10,8 +10,7 @@ use iced::widget::{
 use iced::{Element, Font, Length, Theme};
 
 use super::{short, style};
-use crate::app::{App, Message};
-use crate::icons;
+use app::{App, Message};
 use code::{self, CodeDoc, RowKind, RowRef};
 
 /// Every row has exactly this height, which is what makes windowing possible.
@@ -22,9 +21,6 @@ const GUTTER_W: f32 = 40.0;
 const MARKER_W: f32 = 12.0;
 const ACTIONS_W: f32 = 56.0;
 
-pub fn scroll_id() -> scrollable::Id {
-    scrollable::Id::new("code-scroll")
-}
 
 pub fn view(app: &App) -> Element<'_, Message> {
     match &app.code {
@@ -34,7 +30,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn icon_button<'a>(icon: Svg<'a>, message: Message) -> Element<'a, Message> {
-    button(icons::tint(icon, 16.0, icons::muted()))
+    button(icon_manager::tint(icon, 16.0, icon_manager::muted()))
         .padding(7)
         .on_press(message)
         .style(style::ghost_button)
@@ -49,7 +45,7 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
 
     // ---- header ----
     let header = row![
-        icons::tint(icons::file_text(), 18.0, icons::accent()),
+        icon_manager::tint(icon_manager::file_text(), 18.0, icon_manager::accent()),
         column![
             text(name).size(15).font(style::bold()),
             text(if dir.is_empty() {
@@ -62,8 +58,8 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
         ]
         .spacing(1),
         horizontal_space(),
-        icon_button(icons::refresh_cw(), Message::ReloadCode),
-        icon_button(icons::x(), Message::CloseCode),
+        icon_button(icon_manager::refresh_cw(), Message::ReloadCode),
+        icon_button(icon_manager::x(), Message::CloseCode),
     ]
     .spacing(10)
     .align_y(Vertical::Center);
@@ -84,11 +80,11 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
 
     let toolbar = row![
         container(summary).width(Length::Fill),
-        button(icons::label(
-            icons::undo_2(),
+        button(icon_manager::label(
+            icon_manager::undo_2(),
             "Undo apply",
             12,
-            icons::muted()
+            icon_manager::muted()
         ))
         .padding([6, 10])
         .on_press_maybe(doc.previous.is_some().then_some(Message::UndoApply))
@@ -97,11 +93,11 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
             .padding([6, 10])
             .on_press_maybe((pending > 0).then_some(Message::DiscardEdits))
             .style(style::ghost_button),
-        button(icons::label(
-            icons::check(),
+        button(icon_manager::label(
+            icon_manager::check(),
             format!("Apply ({pending})"),
             13,
-            icons::on_primary()
+            icon_manager::on_primary()
         ))
         .padding([7, 14])
         .on_press_maybe((pending > 0).then_some(Message::ApplyEdits))
@@ -130,7 +126,7 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
 
     let area = container(
         scrollable(lines)
-            .id(scroll_id())
+            .id(shared::code_scroll_id())
             .direction(scrollable::Direction::Both {
                 vertical: scrollable::Scrollbar::default(),
                 horizontal: scrollable::Scrollbar::default(),
@@ -182,19 +178,19 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
     // Suggest (bulb) on every line; revert on lines that have a pending change.
     let actions: Element<'a, Message> = if r.show_actions {
         let bulb_color = if selected {
-            icons::accent()
+            icon_manager::accent()
         } else {
-            icons::muted()
+            icon_manager::muted()
         };
         let mut buttons = row![
-            button(icons::tint(icons::lightbulb(), 13.0, bulb_color))
+            button(icon_manager::tint(icon_manager::lightbulb(), 13.0, bulb_color))
                 .padding([5, 6])
                 .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
                 .style(style::ghost_button)
         ];
         if kind == RowKind::Removed {
             buttons = buttons.push(
-                button(icons::tint(icons::undo_2(), 13.0, icons::muted()))
+                button(icon_manager::tint(icon_manager::undo_2(), 13.0, icon_manager::muted()))
                     .padding([5, 6])
                     .on_press(Message::RevertLine(r.line))
                     .style(style::ghost_button),
@@ -233,7 +229,7 @@ fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message
     let waiting = app.suggesting.is_some();
 
     let top = row![
-        icons::tint(icons::lightbulb(), 15.0, icons::accent()),
+        icon_manager::tint(icon_manager::lightbulb(), 15.0, icon_manager::accent()),
         text(format!("Line {}", line + 1))
             .size(13)
             .font(style::bold()),
@@ -242,7 +238,7 @@ fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message
             .font(Font::MONOSPACE)
             .style(style::dim),
         horizontal_space(),
-        icon_button(icons::x(), Message::CancelSuggest),
+        icon_button(icon_manager::x(), Message::CancelSuggest),
     ]
     .spacing(8)
     .align_y(Vertical::Center);
@@ -262,11 +258,11 @@ fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message
         .padding(9)
         .size(13)
         .style(style::field),
-        button(icons::label(
-            icons::lightbulb(),
+        button(icon_manager::label(
+            icon_manager::lightbulb(),
             action_label,
             13,
-            icons::on_primary()
+            icon_manager::on_primary()
         ))
         .padding([8, 14])
         .on_press_maybe((!waiting).then_some(Message::SubmitSuggestion))

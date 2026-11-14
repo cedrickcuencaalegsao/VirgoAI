@@ -1,23 +1,28 @@
 [package]
 name = "virgo-ai"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 
 [dependencies]
 iced = { version = "0.13", features = ["tokio", "svg"] }
-tokio = { version = "1", features = ["process", "time", "io-util"] }
-rfd = "0.15"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-dirs = "5"
-# walkdir = "2"
-ollama = { path = "ollama" }
-config = { path = "config" }
-project = { path = "project" }
-memory = { path = "memory" }
-code = { path = "code" }
-agent = { path = "agent" }
-chats = { path = "chats" }
-terminal = { path = "terminal" }
-workspace = { path = "workspace" }
-workspaces = { path = "workspaces" }
+virgo_gui = { path = "virgo_gui" }
+app = { path = "app" }
+
+[workspace]
+members = [
+    "agent",
+    "config",
+    "project",
+    "memory",
+    "ollama",
+    "code",
+    "chats",
+    "terminal",
+    "workspace",
+    "workspaces",
+    "virgo_gui",
+    "icon_manager",
+    "style",
+    "app",
+    "shared",
+]

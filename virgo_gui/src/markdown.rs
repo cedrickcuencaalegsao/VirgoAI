@@ -8,8 +8,7 @@ use iced::widget::{
 use iced::{Element, Font, Length};
 
 use super::style;
-use crate::app::Message;
-use crate::icons;
+use app::Message;
 
 enum Block {
     Heading { level: usize, text: String },
@@ -66,7 +65,7 @@ fn code_view<'a>(lang: String, code: String) -> Element<'a, Message> {
     let header = row![
         text(label).size(11).style(style::dim),
         horizontal_space(),
-        button(icons::label(icons::copy(), "Copy", 11, icons::muted()))
+        button(icon_manager::label(icon_manager::copy(), "Copy", 11, icon_manager::muted()))
             .padding([3, 10])
             .on_press(Message::Copy(code.clone()))
             .style(style::ghost_button),

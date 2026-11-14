@@ -1,0 +1,8 @@
+[package]
+name = "icon_manager"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.13", features = ["tokio", "svg"] }
+style = { path = "../style" }

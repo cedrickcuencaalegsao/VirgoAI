@@ -10,17 +10,20 @@ use iced::alignment::Vertical;
 use iced::widget::{row, svg, text, Svg};
 use iced::{Color, Element, Length, Theme};
 
-use crate::ui::style;
+use style;
+
+const ICON_PATH: &str = "../assets/icons";
 
 macro_rules! icon_fn {
     ($name:ident, $file:literal) => {
         pub fn $name<'a>() -> Svg<'a> {
             svg(svg::Handle::from_memory(
-                &include_bytes!(concat!(
+                include_bytes!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
-                    "/assets/icons/",
+                    "/../assets/icons/",
                     $file
-                ))[..],
+                ))
+                .as_slice(),
             ))
         }
     };

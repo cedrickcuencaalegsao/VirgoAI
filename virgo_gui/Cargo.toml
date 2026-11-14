@@ -1,0 +1,17 @@
+[package]
+name = "virgo_gui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced = { version = "0.13", features = ["tokio", "svg"] }
+icon_manager = { path = "../icon_manager" }
+workspace = { path = "../workspace" }
+workspaces = { path = "../workspaces" }
+agent = { path = "../agent" }
+app = { path = "../app" }
+code = { path = "../code" }
+project = { path = "../project" }
+config = { path = "../config" }
+chats = { path = "../chats" }
+shared = {path = "../shared"}

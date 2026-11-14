@@ -7,8 +7,7 @@ use iced::widget::{
 use iced::{Element, Length};
 
 use super::style;
-use crate::app::{App, Message};
-use crate::icons;
+use app::{App, Message};
 use project::{Entry, Project};
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -26,7 +25,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn icon_button<'a>(icon: Svg<'a>, message: Message) -> Element<'a, Message> {
-    button(icons::tint(icon, 16.0, icons::muted()))
+    button(icon_manager::tint(icon, 16.0, icon_manager::muted()))
         .padding(7)
         .on_press(message)
         .style(style::ghost_button)
@@ -43,11 +42,11 @@ fn empty_view(app: &App) -> Element<'_, Message> {
         )
         .size(13)
         .style(style::dim),
-        button(icons::label(
-            icons::folder_open(),
+        button(icon_manager::label(
+            icon_manager::folder_open(),
             "Open folder",
             14,
-            icons::on_primary()
+            icon_manager::on_primary()
         ))
         .width(Length::Fill)
         .padding([10, 14])
@@ -80,9 +79,9 @@ fn open_view<'a>(app: &'a App, project: &'a Project) -> Element<'a, Message> {
         ]
         .spacing(2),
         horizontal_space(),
-        icon_button(icons::folder_open(), Message::OpenFolder),
-        icon_button(icons::refresh_cw(), Message::RefreshProject),
-        icon_button(icons::x(), Message::CloseProject),
+        icon_button(icon_manager::folder_open(), Message::OpenFolder),
+        icon_button(icon_manager::refresh_cw(), Message::RefreshProject),
+        icon_button(icon_manager::x(), Message::CloseProject),
     ]
     .spacing(2)
     .align_y(Vertical::Center);
@@ -118,15 +117,15 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
     if entry.is_dir {
         let open = app.expanded.contains(&entry.rel);
         let chevron = if open {
-            icons::chevron_down()
+            icon_manager::chevron_down()
         } else {
-            icons::chevron_right()
+            icon_manager::chevron_right()
         };
 
         let content = row![
             indent,
-            icons::tint(chevron, 14.0, icons::muted()),
-            icons::tint(icons::folder(), 15.0, icons::accent()),
+            icon_manager::tint(chevron, 14.0, icon_manager::muted()),
+            icon_manager::tint(icon_manager::folder(), 15.0, icon_manager::accent()),
             text(entry.name.as_str()).size(13),
         ]
         .spacing(6)
@@ -142,15 +141,15 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
         let attached = app.attached.contains(&entry.rel);
         let open_here = app.code.as_ref().is_some_and(|doc| doc.rel == entry.rel);
         let icon_color = if open_here {
-            icons::accent()
+            icon_manager::accent()
         } else {
-            icons::muted()
+            icon_manager::muted()
         };
 
         let content = row![
             indent,
             Space::with_width(Length::Fixed(14.0)),
-            icons::tint(icons::file_text(), 15.0, icon_color),
+            icon_manager::tint(icon_manager::file_text(), 15.0, icon_color),
             text(entry.name.as_str()).size(13),
         ]
         .spacing(6)
@@ -158,14 +157,14 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
 
         // Paperclip attaches the file to the chat; it turns into a check once attached.
         let attach_icon = if attached {
-            icons::check()
+            icon_manager::check()
         } else {
-            icons::paperclip()
+            icon_manager::paperclip()
         };
         let attach_color = if attached {
-            icons::accent()
+            icon_manager::accent()
         } else {
-            icons::muted()
+            icon_manager::muted()
         };
 
         row![
@@ -175,7 +174,7 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
                 .padding([5, 8])
                 .on_press(Message::OpenFile(entry.rel.clone()))
                 .style(style::nav_item(open_here)),
-            button(icons::tint(attach_icon, 15.0, attach_color))
+            button(icon_manager::tint(attach_icon, 15.0, attach_color))
                 .padding([6, 7])
                 .on_press(Message::ToggleAttach(entry.rel.clone()))
                 .style(style::ghost_button),
@@ -188,7 +187,7 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
 
 fn footer(app: &App) -> Element<'_, Message> {
     row![
-        icons::tint(icons::paperclip(), 14.0, icons::muted()),
+        icon_manager::tint(icon_manager::paperclip(), 14.0, icon_manager::muted()),
         text(format!("{} attached", app.attached.len()))
             .size(12)
             .style(style::dim),

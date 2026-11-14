@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod chat;
 pub mod code_panel;
 pub mod markdown;
@@ -5,10 +6,10 @@ pub mod memory;
 pub mod nav;
 pub mod project_panel;
 pub mod settings;
+pub mod sidebar;
 pub mod style;
-pub mod workspaces;
-pub mod actions;
 pub mod terminal_panel;
+pub mod workspaces;
 
 /// Shorten text so it fits on one line, adding `...` when cut.
 pub fn short(text: &str, max: usize) -> String {

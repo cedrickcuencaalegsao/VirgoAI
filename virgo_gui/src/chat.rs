@@ -7,8 +7,8 @@ use iced::widget::{
 use iced::{keyboard, Element, Length, Theme};
 
 use super::{markdown, short, style};
-use crate::app::{App, Message};
-use crate::icons;
+use app::{App, Message};
+use icon_manager;
 use agent::{ChatMessage, Role};
 
 pub fn scroll_id() -> scrollable::Id {
@@ -61,22 +61,22 @@ pub fn view(app: &App) -> Element<'_, Message> {
     };
 
     let panel_color = if app.show_panel {
-        icons::accent()
+        icon_manager::accent()
     } else {
-        icons::muted()
+        icon_manager::muted()
     };
     let terminal_color = if app.show_terminal {
-        icons::accent()
+        icon_manager::accent()
     } else {
-        icons::muted()
+        icon_manager::muted()
     };
 
     let back: Element<'_, Message> = match app.chat_workspace() {
-        Some(slug) => button(icons::label(
-            icons::folder_kanban(),
+        Some(slug) => button(icon_manager::label(
+            icon_manager::folder_kanban(),
             "Project",
             12,
-            icons::muted(),
+            icon_manager::muted(),
         ))
         .padding([7, 12])
         .on_press(Message::OpenWorkspace(slug))
@@ -93,15 +93,15 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(2),
         horizontal_space(),
         back,
-        button(icons::tint(icons::refresh_cw(), 16.0, icons::muted()))
+        button(icon_manager::tint(icon_manager::refresh_cw(), 16.0, icon_manager::muted()))
             .padding(8)
             .on_press(Message::RefreshModels)
             .style(style::ghost_button),
-        button(icons::tint(icons::terminal(), 18.0, terminal_color))
+        button(icon_manager::tint(icon_manager::terminal(), 18.0, terminal_color))
             .padding(8)
             .on_press(Message::ToggleTerminal)
             .style(style::ghost_button),
-        button(icons::tint(icons::panel_right(), 18.0, panel_color))
+        button(icon_manager::tint(icon_manager::panel_right(), 18.0, panel_color))
             .padding(8)
             .on_press(Message::TogglePanel)
             .style(style::ghost_button),
@@ -147,20 +147,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .size(16)
             .text_size(12),
         horizontal_space(),
-        button(icons::label(
-            icons::undo_2(),
+        button(icon_manager::label(
+            icon_manager::undo_2(),
             format!("Revert last AI edit ({n})"),
             12,
-            icons::muted()
+            icon_manager::muted()
         ))
         .padding([6, 12])
         .on_press_maybe((n > 0).then_some(Message::RevertLast))
         .style(style::ghost_button),
-        button(icons::label(
-            icons::database(),
+        button(icon_manager::label(
+            icon_manager::database(),
             "Remember last reply",
             12,
-            icons::muted()
+            icon_manager::muted()
         ))
         .padding([6, 12])
         .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
@@ -171,13 +171,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // Round, icon-only action button.
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {
-        button(icons::tint(icons::square(), 16.0, icons::on_danger()))
+        button(icon_manager::tint(icon_manager::square(), 16.0, icon_manager::on_danger()))
             .padding(12)
             .on_press(Message::Stop)
             .style(style::stop_button)
             .into()
     } else {
-        button(icons::tint(icons::send(), 16.0, icons::on_primary()))
+        button(icon_manager::tint(icon_manager::send(), 16.0, icon_manager::on_primary()))
             .padding(12)
             .on_press_maybe(can_send.then_some(Message::Send))
             .style(style::send_button)
@@ -253,7 +253,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 /// Editable plan with Run / Discard, shown while `app.reviewing`.
 fn plan_review(app: &App) -> Element<'_, Message> {
     let header = row![
-        icons::tint(icons::lightbulb(), 18.0, icons::accent()),
+        icon_manager::tint(icon_manager::lightbulb(), 18.0, icon_manager::accent()),
         column![
             text("Review the plan").size(15).font(style::bold()),
             text("Edit it however you like. The model will follow your version.")
@@ -273,11 +273,11 @@ fn plan_review(app: &App) -> Element<'_, Message> {
         .style(style::plan_editor);
 
     let actions = row![
-        button(icons::label(
-            icons::check(),
+        button(icon_manager::label(
+            icon_manager::check(),
             "Run plan",
             13,
-            icons::on_primary()
+            icon_manager::on_primary()
         ))
         .padding([9, 18])
         .on_press(Message::RunPlan)
@@ -311,7 +311,7 @@ fn proposal_bar(app: &App) -> Option<Element<'_, Message>> {
     }
 
     let mut bar = row![
-        icons::tint(icons::lightbulb(), 14.0, icons::accent()),
+        icon_manager::tint(icon_manager::lightbulb(), 14.0, icon_manager::accent()),
         text("Proposed changes:").size(12).style(style::dim),
     ]
     .spacing(6)
@@ -340,7 +340,7 @@ fn attachments(app: &App) -> Option<Element<'_, Message>> {
         return None;
     }
 
-    let mut chips = row![icons::tint(icons::paperclip(), 14.0, icons::accent())]
+    let mut chips = row![icon_manager::tint(icon_manager::paperclip(), 14.0, icon_manager::accent())]
         .spacing(6)
         .align_y(Vertical::Center);
 
@@ -350,7 +350,7 @@ fn attachments(app: &App) -> Option<Element<'_, Message>> {
             button(
                 row![
                     text(short(name, 18)).size(12),
-                    icons::tint(icons::x(), 11.0, icons::muted()),
+                    icon_manager::tint(icon_manager::x(), 11.0, icon_manager::muted()),
                 ]
                 .spacing(4)
                 .align_y(Vertical::Center),
@@ -398,11 +398,11 @@ fn suggestions(app: &App) -> Option<Element<'_, Message>> {
 
     let list = column(hits.into_iter().map(|entry| {
         let icon = if entry.is_dir {
-            icons::folder()
+            icon_manager::folder()
         } else {
-            icons::file_text()
+            icon_manager::file_text()
         };
-        button(icons::label(icon, entry.rel.as_str(), 13, icons::muted()))
+        button(icon_manager::label(icon, entry.rel.as_str(), 13, icon_manager::muted()))
             .width(Length::Fill)
             .padding([6, 10])
             .on_press(Message::PickMention(entry.rel.clone()))
@@ -517,7 +517,7 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
             .style(style::accent),
         text(model).size(11).style(style::dim),
         horizontal_space(),
-        button(icons::label(icons::copy(), "Copy", 11, icons::muted()))
+        button(icon_manager::label(icon_manager::copy(), "Copy", 11, icon_manager::muted()))
             .padding([3, 10])
             .on_press_maybe((!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone())))
             .style(style::ghost_button),

@@ -3,7 +3,7 @@ use iced::widget::{button, checkbox, column, container, row, scrollable, text, t
 use iced::{Element, Length};
 
 use super::style;
-use crate::app::{App, Message};
+use app::{App, Message};
 use config::Config;
 
 fn labeled<'a>(label: &'a str, input: impl Into<Element<'a, Message>>) -> Element<'a, Message> {

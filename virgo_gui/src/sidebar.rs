@@ -4,7 +4,7 @@ use iced::widget::{
 };
 use iced::{Element, Length, Theme};
 
-use crate::app::{App, Message};
+use app::{App, Message};
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let header = row![

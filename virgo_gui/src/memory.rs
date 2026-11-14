@@ -5,7 +5,7 @@ use iced::widget::{
 use iced::{Element, Length};
 
 use super::style;
-use crate::app::{App, Message};
+use app::{App, Message};
 
 pub fn view(app: &App) -> Element<'_, Message> {
     // ---- left: list of notes ----

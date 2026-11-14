@@ -3,8 +3,7 @@ use iced::widget::{button, column, container, row, scrollable, text, Space, Svg}
 use iced::{Element, Length};
 
 use super::{short, style};
-use crate::app::{App, Message, Screen};
-use crate::icons;
+use app::{App, Message, Screen};
 use workspaces::Workspace;
 
 pub fn view(app: &App) -> Element<'_, Message> {
@@ -20,11 +19,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
     ]
     .spacing(2);
 
-    let new_chat = button(icons::label(
-        icons::plus(),
+    let new_chat = button(icon_manager::label(
+        icon_manager::plus(),
         "New chat",
         14,
-        icons::on_primary(),
+        icon_manager::on_primary(),
     ))
     .width(Length::Fill)
     .padding([10, 14])
@@ -40,15 +39,15 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let items = column![
         item(
-            icons::folder_kanban(),
+            icon_manager::folder_kanban(),
             "Projects",
             Screen::Projects,
             projects_current
         ),
-        item(icons::message_square(), "Chat", Screen::Chat, app.screen),
-        item(icons::database(), "Memory", Screen::Memory, app.screen),
+        item(icon_manager::message_square(), "Chat", Screen::Chat, app.screen),
+        item(icon_manager::database(), "Memory", Screen::Memory, app.screen),
         item(
-            icons::sliders_horizontal(),
+            icon_manager::sliders_horizontal(),
             "Settings",
             Screen::Settings,
             app.screen
@@ -145,14 +144,14 @@ fn item<'a>(
 ) -> Element<'a, Message> {
     let active = target == current;
     let color = if active {
-        icons::accent()
+        icon_manager::accent()
     } else {
-        icons::muted()
+        icon_manager::muted()
     };
 
     row![
         indicator(active),
-        button(icons::label(icon, label, 14, color))
+        button(icon_manager::label(icon, label, 14, color))
             .width(Length::Fill)
             .padding([10, 14])
             .on_press(Message::Navigate(target))
@@ -172,9 +171,9 @@ fn project_block<'a>(app: &'a App, w: &'a Workspace) -> Element<'a, Message> {
         && app.selected_workspace.as_deref() == Some(w.slug.as_str());
 
     let icon = if expanded {
-        icons::tint(icons::folder_open(), 14.0, icons::accent())
+        icon_manager::tint(icon_manager::folder_open(), 14.0, icon_manager::accent())
     } else {
-        icons::tint(icons::folder_kanban(), 14.0, icons::muted())
+        icon_manager::tint(icon_manager::folder_kanban(), 14.0, icon_manager::muted())
     };
 
     let head = button(
@@ -215,7 +214,7 @@ fn chat_row<'a>(app: &'a App, id: &'a str, title: &str) -> Element<'a, Message> 
             .padding([7, 10])
             .on_press_maybe(enabled.then(|| Message::OpenChat(id.to_string())))
             .style(style::nav_item(active)),
-        button(icons::tint(icons::trash_2(), 14.0, icons::muted()))
+        button(icon_manager::tint(icon_manager::trash_2(), 14.0, icon_manager::muted()))
             .padding([7, 8])
             .on_press_maybe(enabled.then(|| Message::DeleteChat(id.to_string())))
             .style(style::ghost_button),

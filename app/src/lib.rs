@@ -2,13 +2,12 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use iced::widget::{column, container, row, scrollable, text, text_editor};
-use iced::{Element, Length, Subscription, Task, Theme};
+use iced::widget::{ scrollable, text_editor};
+use iced::{Subscription, Task, Theme};
 
 use terminal::{self, RunResult};
 use workspace::{self, Action, ChangeSet};
 
-use crate::ui;
 use agent::pipeline::{self, Intent, Pending, Proposal};
 use agent::{ChatMessage, Role};
 use chats::{self, Chat, ChatSummary};
@@ -348,7 +347,7 @@ impl App {
     }
 
     pub fn theme(&self) -> Theme {
-        ui::style::theme()
+        style::theme()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -1279,7 +1278,7 @@ impl App {
                 self.suggest_input.clear();
                 self.suggesting = None;
                 scrollable::snap_to(
-                    ui::code_panel::scroll_id(),
+                    shared::code_scroll_id(),
                     scrollable::RelativeOffset::START,
                 )
             }
@@ -1721,63 +1720,6 @@ impl App {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // view
-    // -----------------------------------------------------------------------
-
-    pub fn view(&self) -> Element<'_, Message> {
-        let page: Element<'_, Message> = match self.screen {
-            Screen::Chat => {
-                let chat_width = if self.code.is_some() {
-                    Length::FillPortion(2)
-                } else {
-                    Length::Fill
-                };
-                let mut panels = row![container(ui::chat::view(self))
-                    .width(chat_width)
-                    .height(Length::Fill)]
-                .spacing(14)
-                .height(Length::Fill);
-
-                if self.code.is_some() {
-                    panels = panels.push(
-                        container(ui::code_panel::view(self))
-                            .width(Length::FillPortion(3))
-                            .height(Length::Fill),
-                    );
-                }
-                if self.show_panel {
-                    panels = panels.push(ui::project_panel::view(self));
-                }
-                let panels: Element<'_, Message> = panels.into();
-                if self.show_terminal {
-                    column![
-                        container(panels).height(Length::Fill),
-                        ui::terminal_panel::view(self)
-                    ]
-                    .spacing(14)
-                    .height(Length::Fill)
-                    .into()
-                } else {
-                    panels
-                }
-            }
-            Screen::Memory => ui::memory::view(self),
-            Screen::Settings => ui::settings::view(self),
-            Screen::Projects | Screen::Project => ui::workspaces::view(self),
-        };
-
-        let footer = text(self.status.as_str()).size(12).style(ui::style::dim);
-
-        let content = column![container(page).height(Length::Fill), footer]
-            .spacing(8)
-            .padding(18)
-            .width(Length::Fill);
-
-        row![ui::nav::view(self), content]
-            .height(Length::Fill)
-            .into()
-    }
     /// Edit mode: send the whole-project map instead of a bare file tree.
     fn map_context(&mut self, message: &str) -> (String, Vec<String>) {
         self.context_note.clear();
@@ -2404,7 +2346,7 @@ impl App {
             self.term_log.drain(..cut);
         }
         let scroll = scrollable::snap_to(
-            ui::terminal_panel::scroll_id(),
+            shared::terminal_scroll_id(),
             scrollable::RelativeOffset::END,
         );
         self.status = "Command finished".into();
@@ -2441,7 +2383,7 @@ impl App {
 }
 
 fn scroll_to_end() -> Task<Message> {
-    scrollable::snap_to(ui::chat::scroll_id(), scrollable::RelativeOffset::END)
+    scrollable::snap_to(shared::chat_scroll_id(), scrollable::RelativeOffset::END)
 }
 
 /// Native "choose folder" dialog.

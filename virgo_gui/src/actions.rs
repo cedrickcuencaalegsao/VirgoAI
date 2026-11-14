@@ -3,8 +3,9 @@ use iced::widget::{button, column, container, horizontal_space, row, text};
 use iced::{Element, Font, Length, Theme};
 
 use super::{short, style};
-use crate::app::{ActionStatus, App, Message};
-use crate::icons;
+use app::{ActionStatus, App, Message};
+
+use icon_manager;
 use workspace::{self, Action, Hunk};
 
 const PREVIEW_LINES: usize = 6;
@@ -49,11 +50,11 @@ pub fn view<'a>(
 
     if unapplied > 1 && !streaming {
         list = list.push(
-            button(icons::label(
-                icons::check(),
+            button(icon_manager::label(
+                icon_manager::check(),
                 format!("Apply all edits ({unapplied})"),
                 13,
-                icons::on_primary(),
+                icon_manager::on_primary(),
             ))
             .padding([7, 14])
             .on_press_maybe(app.project.is_some().then_some(Message::ApplyAll(msg_idx)))
@@ -83,7 +84,7 @@ fn edit_card<'a>(
     let removed: usize = hunks.iter().map(|h| line_count(&h.search)).sum();
 
     let mut header = row![
-        icons::tint(icons::file_text(), 15.0, icons::accent()),
+        icon_manager::tint(icon_manager::file_text(), 15.0, icon_manager::accent()),
         text(path.to_string()).size(13).font(style::bold()),
         text(format!("+{added}")).size(12).style(style::success),
         text(format!("-{removed}"))
@@ -99,7 +100,7 @@ fn edit_card<'a>(
             header = header
                 .push(text("Applied").size(12).style(style::success))
                 .push(
-                    button(icons::label(icons::undo_2(), "Revert", 12, icons::muted()))
+                    button(icon_manager::label(icon_manager::undo_2(), "Revert", 12, icon_manager::muted()))
                         .padding([5, 10])
                         .on_press(Message::RevertChange(*id))
                         .style(style::ghost_button),
@@ -107,11 +108,11 @@ fn edit_card<'a>(
         }
         _ => {
             header = header.push(
-                button(icons::label(
-                    icons::check(),
+                button(icon_manager::label(
+                    icon_manager::check(),
                     "Apply",
                     12,
-                    icons::on_primary(),
+                    icon_manager::on_primary(),
                 ))
                 .padding([5, 12])
                 .on_press_maybe(
@@ -191,13 +192,13 @@ fn run_card<'a>(
 
     container(
         row![
-            icons::tint(icons::terminal(), 15.0, icons::accent()),
+            icon_manager::tint(icon_manager::terminal(), 15.0, icon_manager::accent()),
             text(command.to_string())
                 .font(Font::MONOSPACE)
                 .size(13)
                 .width(Length::Fill),
             text(note).size(12).style(style::dim),
-            button(icons::label(icons::play(), label, 12, icons::on_primary()))
+            button(icon_manager::label(icon_manager::play(), label, 12, icon_manager::on_primary()))
                 .padding([5, 12])
                 .on_press_maybe(can_run.then_some(Message::RunAction(msg_idx, i)))
                 .style(style::primary_button),
@@ -219,7 +220,7 @@ fn delete_card<'a>(
     status: Option<&ActionStatus>,
 ) -> Element<'a, Message> {
     let mut header = row![
-        icons::tint(icons::trash_2(), 15.0, icons::accent()),
+        icon_manager::tint(icon_manager::trash_2(), 15.0, icon_manager::accent()),
         text(format!("Delete {path}")).size(13).font(style::bold()),
         horizontal_space(),
     ]
@@ -230,13 +231,13 @@ fn delete_card<'a>(
         Some(ActionStatus::Applied(id)) => header
             .push(text("Deleted").size(12).style(style::success))
             .push(
-                button(icons::label(icons::undo_2(), "Revert", 12, icons::muted()))
+                button(icon_manager::label(icon_manager::undo_2(), "Revert", 12, icon_manager::muted()))
                     .padding([5, 10])
                     .on_press(Message::RevertChange(*id))
                     .style(style::ghost_button),
             ),
         _ => header.push(
-            button(icons::label(icons::check(), "Apply", 12, icons::on_primary()))
+            button(icon_manager::label(icon_manager::check(), "Apply", 12, icon_manager::on_primary()))
                 .padding([5, 12])
                 .on_press_maybe(app.project.is_some().then_some(Message::ApplyAction(msg_idx, i)))
                 .style(style::primary_button),

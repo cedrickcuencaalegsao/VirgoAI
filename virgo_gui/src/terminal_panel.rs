@@ -5,18 +5,13 @@ use iced::widget::{
 use iced::{Element, Font, Length};
 
 use super::style;
-use crate::app::{App, Message};
-use crate::icons;
-
-pub fn scroll_id() -> scrollable::Id {
-    scrollable::Id::new("term-scroll")
-}
+use app::{App, Message};
 
 pub fn view(app: &App) -> Element<'_, Message> {
     let project = app.project.as_ref().map(|p| p.name.as_str()).unwrap_or("no project open");
 
     let header = row![
-        icons::tint(icons::terminal(), 16.0, icons::accent()),
+        icon_manager::tint(icon_manager::terminal(), 16.0, icon_manager::accent()),
         text("Terminal").size(14).font(style::bold()),
         text(project).size(11).style(style::dim),
         horizontal_space(),
@@ -24,7 +19,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .padding([4, 8])
             .on_press(Message::TermClear)
             .style(style::ghost_button),
-        button(icons::tint(icons::x(), 14.0, icons::muted()))
+        button(icon_manager::tint(icon_manager::x(), 14.0, icon_manager::muted()))
             .padding(6)
             .on_press(Message::ToggleTerminal)
             .style(style::ghost_button),
@@ -43,7 +38,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let output = container(
         scrollable(container(log).padding(8).width(Length::Fill))
-            .id(scroll_id())
+            .id(shared::terminal_scroll_id())
             .width(Length::Fill)
             .height(Length::Fill),
     )
@@ -61,11 +56,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .padding(8)
             .size(13)
             .style(style::field),
-        button(icons::label(
-            icons::play(),
+        button(icon_manager::label(
+            icon_manager::play(),
             if app.term_running { "Running..." } else { "Run" },
             13,
-            icons::on_primary()
+            icon_manager::on_primary()
         ))
         .padding([8, 14])
         .on_press_maybe(can_run.then_some(Message::TermSubmit))

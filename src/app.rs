@@ -58,6 +58,7 @@ pub enum Message {
     OpenChat(String),
     DeleteChat(String),
     InputChanged(String),
+    InputAction(text_editor::Action),
     Send,
     Stop,
     Stream(StreamEvent),
@@ -184,6 +185,7 @@ pub struct App {
     /// Id of the conversation on screen (None until its first message is saved).
     pub current_chat: Option<String>,
     pub input: String,
+    pub input_editor: text_editor::Content,
     pub pending: Option<Pending>,
     pub abort: Option<iced::task::Handle>,
 
@@ -291,6 +293,7 @@ impl App {
             chats: chat_list,
             current_chat: None,
             input: String::new(),
+            input_editor: text_editor::Content::new(),
             pending: None,
             abort: None,
             intent: Intent::Answer,
@@ -412,7 +415,16 @@ impl App {
                 Task::none()
             }
             Message::InputChanged(value) => {
+                // Used by the starter chips: fill the box and put the cursor at the end.
+                self.input_editor = text_editor::Content::with_text(&value);
+                self.input_editor
+                    .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
                 self.input = value;
+                Task::none()
+            }
+            Message::InputAction(action) => {
+                self.input_editor.perform(action);
+                self.input = self.input_editor.text();
                 Task::none()
             }
             Message::Send => {
@@ -916,6 +928,7 @@ impl App {
             return Task::none();
         }
         self.input.clear();
+        self.input_editor = text_editor::Content::new();
 
         // "/edit ..." forces the change workflow.
         let (forced, text) = match raw.strip_prefix("/edit ") {
@@ -1418,6 +1431,10 @@ impl App {
             .unwrap_or(0);
         self.input.truncate(start);
         self.input.push_str(&format!("@{rel} "));
+        self.input.push_str(&format!("@{rel} "));
+        self.input_editor = text_editor::Content::with_text(&self.input);
+        self.input_editor
+            .perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
     }
 
     /// Build the project part of the prompt: the folder tree plus the contents

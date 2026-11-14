@@ -1,9 +1,10 @@
 use iced::alignment::{Horizontal, Vertical};
+use iced::widget::text_editor::{Binding, Status};
 use iced::widget::{
     button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
-    text_editor, text_input, Space,
+    text_editor, Space,
 };
-use iced::{Element, Length, Theme};
+use iced::{keyboard, Element, Length, Theme};
 
 use super::{markdown, short, style};
 use crate::app::{App, Message};
@@ -111,7 +112,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // Model pickers get their own row, so they never get squeezed.
     let header = column![top, pickers].spacing(10);
 
-    // ---- messages ----
+    // ---- messages (centred reading column) ----
     let body: Element<'_, Message> = if app.messages.is_empty() {
         welcome()
     } else {
@@ -121,15 +122,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .enumerate()
                 .map(|(index, msg)| bubble(app, index, msg)),
         )
-        .spacing(14)
-        .padding([4, 12])
+        .spacing(18)
+        .padding([style::SP_2, style::SP_3])
         .into()
     };
 
-    let history = scrollable(body)
-        .id(scroll_id())
-        .width(Length::Fill)
-        .height(Length::Fill);
+    let history = scrollable(
+        container(body)
+            .max_width(style::READING_WIDTH)
+            .center_x(Length::Fill),
+    )
+    .id(scroll_id())
+    .style(style::scroll)
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     // ---- composer ----
     let n = app.revertable();
@@ -150,7 +156,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .padding([6, 12])
         .on_press_maybe((n > 0).then_some(Message::RevertLast))
         .style(style::ghost_button),
-        horizontal_space(),
         button(icons::label(
             icons::database(),
             "Remember last reply",
@@ -160,25 +165,22 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .padding([6, 12])
         .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
         .style(style::ghost_button),
-    ];
+    ]
+    .align_y(Vertical::Center);
 
+    // Round, icon-only action button.
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {
-        button(icons::label(
-            icons::square(),
-            "Stop",
-            14,
-            icons::on_danger(),
-        ))
-        .padding([10, 18])
-        .on_press(Message::Stop)
-        .style(style::danger_button)
-        .into()
+        button(icons::tint(icons::square(), 16.0, icons::on_danger()))
+            .padding(12)
+            .on_press(Message::Stop)
+            .style(style::stop_button)
+            .into()
     } else {
-        button(icons::label(icons::send(), "Send", 14, icons::on_primary()))
-            .padding([10, 18])
+        button(icons::tint(icons::send(), 16.0, icons::on_primary()))
+            .padding(12)
             .on_press_maybe(can_send.then_some(Message::Send))
-            .style(style::primary_button)
+            .style(style::send_button)
             .into()
     };
 
@@ -190,78 +192,109 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     let composer = container(
         row![
-            text_input(placeholder, &app.input)
-                .on_input(Message::InputChanged)
-                .on_submit(Message::Send)
-                .padding(12)
-                .size(15)
-                .style(style::composer_input),
+            container(
+                text_editor(&app.input_editor)
+                    .placeholder(placeholder)
+                    .on_action(Message::InputAction)
+                    .key_binding(|kp| {
+                        let enter =
+                            matches!(kp.key, keyboard::Key::Named(keyboard::key::Named::Enter));
+                        if matches!(kp.status, Status::Focused) && enter && !kp.modifiers.shift() {
+                            Some(Binding::Custom(Message::Send))
+                        } else {
+                            Binding::from_key_press(kp)
+                        }
+                    })
+                    .padding([12, 16])
+                    .size(15)
+                    .height(Length::Shrink)
+                    .style(style::composer_editor),
+            )
+            .max_height(160) // grows with the text, then scrolls
+            .width(Length::Fill),
             action,
         ]
         .spacing(8)
-        .align_y(Vertical::Center),
+        .align_y(Vertical::Bottom), // button stays at the bottom as the box grows
     )
-    .padding(6)
+    .padding([6, 8])
     .style(style::composer);
 
-    let mut page = column![header, history].spacing(12);
+    // Everything above the composer lines up with the reading column.
+    let mut lower = column![].spacing(12);
     if let Some(suggestions) = suggestions(app) {
-        page = page.push(suggestions);
+        lower = lower.push(suggestions);
     }
     if app.reviewing {
-        page = page.push(plan_review(app));
+        lower = lower.push(plan_review(app));
     }
     if let Some(bar) = proposal_bar(app) {
-        page = page.push(bar);
+        lower = lower.push(bar);
     }
     if let Some(chips) = attachments(app) {
-        page = page.push(chips);
+        lower = lower.push(chips);
     }
-    page.push(remember)
-        .push(composer)
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    let lower = lower.push(remember).push(composer);
+
+    column![
+        header,
+        history,
+        container(lower)
+            .max_width(style::READING_WIDTH)
+            .center_x(Length::Fill),
+    ]
+    .spacing(12)
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 /// Editable plan with Run / Discard, shown while `app.reviewing`.
+/// Editable plan with Run / Discard, shown while `app.reviewing`.
 fn plan_review(app: &App) -> Element<'_, Message> {
-    container(
+    let header = row![
+        icons::tint(icons::lightbulb(), 18.0, icons::accent()),
         column![
-            row![
-                text("Review the plan").size(14).font(style::bold()),
-                text("Edit it however you like. The model will follow your version.")
-                    .size(12)
-                    .style(style::dim),
-            ]
-            .spacing(10)
-            .align_y(Vertical::Center),
-            text_editor(&app.plan_editor)
-                .on_action(Message::PlanAction)
-                .height(Length::Fixed(180.0)),
-            row![
-                button(icons::label(
-                    icons::check(),
-                    "Run plan",
-                    13,
-                    icons::on_primary()
-                ))
-                .padding([8, 14])
-                .on_press(Message::RunPlan)
-                .style(style::primary_button),
-                button(text("Discard").size(13))
-                    .padding([8, 14])
-                    .on_press(Message::DiscardPlan)
-                    .style(style::ghost_button),
-            ]
-            .spacing(8),
+            text("Review the plan").size(15).font(style::bold()),
+            text("Edit it however you like. The model will follow your version.")
+                .size(12)
+                .style(style::dim),
         ]
-        .spacing(8),
-    )
-    .padding(12)
-    .width(Length::Fill)
-    .style(style::plan_card)
-    .into()
+        .spacing(2),
+    ]
+    .spacing(10)
+    .align_y(Vertical::Center);
+
+    let editor = text_editor(&app.plan_editor)
+        .on_action(Message::PlanAction)
+        .padding(12)
+        .size(14)
+        .height(Length::Fixed(200.0))
+        .style(style::plan_editor);
+
+    let actions = row![
+        button(icons::label(
+            icons::check(),
+            "Run plan",
+            13,
+            icons::on_primary()
+        ))
+        .padding([9, 18])
+        .on_press(Message::RunPlan)
+        .style(style::primary_button),
+        button(text("Discard").size(13))
+            .padding([9, 16])
+            .on_press(Message::DiscardPlan)
+            .style(style::ghost_button),
+    ]
+    .spacing(8)
+    .align_y(Vertical::Center);
+
+    container(column![header, editor, actions].spacing(12))
+        .padding(16)
+        .width(Length::Fill)
+        .style(style::plan_card)
+        .into()
 }
 
 /// One chip per file the model wants to change. Click to stage it in the code panel.
@@ -289,7 +322,7 @@ fn proposal_bar(app: &App) -> Option<Element<'_, Message>> {
         let name = file.rsplit('/').next().unwrap_or(file);
         bar = bar.push(
             button(text(format!("{} ({count})", short(name, 22))).size(12))
-                .padding([4, 8])
+                .padding([4, 10])
                 .on_press(Message::ReviewChange(file.to_string()))
                 .style(style::chip),
         );
@@ -322,7 +355,7 @@ fn attachments(app: &App) -> Option<Element<'_, Message>> {
                 .spacing(4)
                 .align_y(Vertical::Center),
             )
-            .padding([4, 8])
+            .padding([4, 10])
             .on_press(Message::ToggleAttach(rel.clone()))
             .style(style::chip),
         );
@@ -385,6 +418,15 @@ fn suggestions(app: &App) -> Option<Element<'_, Message>> {
 // Messages
 // ---------------------------------------------------------------------------
 
+/// A starter prompt: clicking it fills the composer (press Enter to send).
+fn starter<'a>(label: &'static str) -> Element<'a, Message> {
+    button(text(label).size(13))
+        .padding([8, 16])
+        .on_press(Message::InputChanged(label.to_string()))
+        .style(style::chip)
+        .into()
+}
+
 fn welcome<'a>() -> Element<'a, Message> {
     container(
         column![
@@ -401,8 +443,18 @@ fn welcome<'a>() -> Element<'a, Message> {
             .style(style::dim)
             .width(Length::Fill)
             .align_x(Horizontal::Center),
+            column![
+                row![
+                    starter("Explain this project"),
+                    starter("Find a bug in my code")
+                ]
+                .spacing(8),
+                row![starter("Write tests"), starter("Suggest a refactor")].spacing(8),
+            ]
+            .spacing(8)
+            .align_x(Horizontal::Center),
         ]
-        .spacing(10)
+        .spacing(18)
         .align_x(Horizontal::Center)
         .max_width(520),
     )
@@ -424,7 +476,7 @@ fn bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a, M
                 );
             }
             let bubble = container(content)
-                .padding([10, 14])
+                .padding([10, 16])
                 .max_width(640)
                 .style(style::user_bubble);
             container(bubble)
@@ -473,7 +525,7 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
     .spacing(8)
     .align_y(Vertical::Center);
 
-    let mut body = column![header].spacing(8);
+    let mut body = column![header].spacing(10);
 
     // "Thinking..." status while waiting, or "Thought for Ns" afterwards.
     if !msg.thinking.is_empty() || (active && msg.content.is_empty()) {
@@ -481,7 +533,7 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
     }
     if msg.show_thinking && !msg.thinking.is_empty() {
         body = body.push(
-            container(text(msg.thinking.as_str()).size(13).style(style::dim))
+            container(text(msg.thinking.as_str()).size(12).style(style::dim))
                 .padding(10)
                 .width(Length::Fill)
                 .style(style::thinking_box),
@@ -498,14 +550,16 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
         }
     }
 
+    // Plans stay boxed; assistant replies sit flat on the background.
+    let pad: u16 = if is_plan { 14 } else { 4 };
     container(body)
-        .padding(14)
+        .padding(pad)
         .width(Length::Fill)
         .style(move |theme: &Theme| {
             if is_plan {
                 style::plan_card(theme)
             } else {
-                style::card(theme)
+                container::Style::default()
             }
         })
         .into()

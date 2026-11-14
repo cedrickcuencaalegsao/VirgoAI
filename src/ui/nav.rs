@@ -54,7 +54,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             app.screen
         ),
     ]
-    .spacing(4);
+    .spacing(style::SP_1);
 
     // ---- projects with their conversations ----
     let projects: Element<'_, Message> = if app.workspaces.is_empty() {
@@ -63,6 +63,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         scrollable(
             column(app.workspaces.iter().map(|w| project_block(app, w))).spacing(2),
         )
+        .style(style::scroll)
         .height(Length::Fill)
         .into()
     };
@@ -80,11 +81,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
             )
             .spacing(2),
         )
+        .style(style::scroll)
         .height(Length::Fill)
         .into()
     };
 
-    // ---- models in use ----
+    // ---- models in use (small recessed box) ----
     let planner = if app.cfg.use_planner {
         app.cfg.planner_model.as_str()
     } else {
@@ -93,15 +95,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let project = app
         .chat_workspace_name()
         .unwrap_or_else(|| "none".to_string());
-    let models = column![
-        text("CHAT PROJECT").size(10).style(style::dim),
-        text(short(&project, 24)).size(13),
-        text("PLANNER").size(10).style(style::dim),
-        text(planner).size(13),
-        text("EXECUTOR").size(10).style(style::dim),
-        text(app.cfg.executor_model.as_str()).size(13),
-    ]
-    .spacing(2);
+    let models = container(
+        column![
+            text("CHAT PROJECT").size(10).style(style::dim),
+            text(short(&project, 24)).size(13),
+            text("PLANNER").size(10).style(style::dim),
+            text(planner).size(13),
+            text("EXECUTOR").size(10).style(style::dim),
+            text(app.cfg.executor_model.as_str()).size(13),
+        ]
+        .spacing(2),
+    )
+    .padding(style::SP_3)
+    .width(Length::Fill)
+    .style(style::inset);
 
     container(
         column![
@@ -114,13 +121,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
             container(recent).height(Length::FillPortion(1)),
             models,
         ]
-        .spacing(14)
-        .padding(20),
+        .spacing(style::SP_4)
+        .padding(style::SP_6 - 4.0),
     )
-    .width(Length::Fixed(240.0))
+    .width(Length::Fixed(248.0))
     .height(Length::Fill)
     .style(style::sidebar)
     .into()
+}
+
+/// A 3px gold bar that shows next to the active item.
+fn indicator<'a>(active: bool) -> Element<'a, Message> {
+    container(Space::new(Length::Fixed(3.0), Length::Fixed(18.0)))
+        .style(style::indicator(active))
+        .into()
 }
 
 fn item<'a>(
@@ -136,12 +150,17 @@ fn item<'a>(
         icons::muted()
     };
 
-    button(icons::label(icon, label, 14, color))
-        .width(Length::Fill)
-        .padding([10, 14])
-        .on_press(Message::Navigate(target))
-        .style(style::nav_item(active))
-        .into()
+    row![
+        indicator(active),
+        button(icons::label(icon, label, 14, color))
+            .width(Length::Fill)
+            .padding([10, 14])
+            .on_press(Message::Navigate(target))
+            .style(style::nav_item(active)),
+    ]
+    .spacing(style::SP_1)
+    .align_y(Vertical::Center)
+    .into()
 }
 
 /// A project row. The open project (or the project of the chat on screen)

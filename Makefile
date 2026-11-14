@@ -132,7 +132,8 @@ endif
 #   make dmg VERSION=1.2.0 BUNDLE_ID=com.you.virgoai
 # ---------------------------------------------------------------------------
 APP_NAME   ?= VirgoAI
-DMG_NAME   ?= $(APP_NAME).dmg
+VERSION    ?= $(shell grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)"/\1/')
+DMG_NAME   ?= $(APP_NAME)-$(VERSION).dmg
 DMG_PATH   ?= build
 APP_BINARY ?= target/release/virgo-ai
 ICON       ?= assets/icons/app-icon.png

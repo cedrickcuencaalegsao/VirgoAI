@@ -396,6 +396,9 @@ impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Navigate(screen) => {
+                if screen == Screen::Memory {
+                    self.refresh_notes();
+                }
                 self.screen = screen;
                 Task::none()
             }
@@ -988,7 +991,7 @@ impl App {
         let mut instructions = String::new();
         if let Some(slug) = self.chat_workspace() {
             instructions = workspaces::instructions(&slug);
-            notes.extend(workspaces::load_notes(&slug));
+            notes.extend(workspaces::load_notes(&slug, self.current_chat.as_deref()));
         }
         let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
         let memory = retrieval::build_context(&notes, &text, budget_chars);
@@ -1042,7 +1045,7 @@ impl App {
         let mut instructions = String::new();
         if let Some(slug) = self.chat_workspace() {
             instructions = workspaces::instructions(&slug);
-            notes.extend(workspaces::load_notes(&slug));
+            notes.extend(workspaces::load_notes(&slug, self.current_chat.as_deref()));
         }
         let budget_chars = self.cfg.num_ctx as usize * 4 / 3;
         let memory = retrieval::build_context(&notes, &text, budget_chars);
@@ -1557,11 +1560,18 @@ impl App {
         }
 
         // Also keep it as a markdown note in the project folder (the project's memory).
-        if let Some(slug) = &chat.project {
-            if let Err(e) = workspaces::save_chat(slug, &chat) {
-                self.status = format!("Could not save to project: {e}");
-            } else if self.selected_workspace.as_deref() == Some(slug.as_str()) {
-                self.refresh_workspace_notes();
+        match &chat.project {
+            Some(slug) => {
+                if let Err(e) = workspaces::save_chat(slug, &chat) {
+                    self.status = format!("Could not save to project: {e}");
+                } else if self.selected_workspace.as_deref() == Some(slug.as_str()) {
+                    self.refresh_workspace_notes();
+                }
+            }
+            None => {
+                if let Err(e) = workspaces::save_chat_to(&self.store, &chat) {
+                    self.status = format!("Could not save to memory: {e}");
+                }
             }
         }
     }
@@ -1743,6 +1753,7 @@ impl App {
             self.selected_note = None;
             self.editor = text_editor::Content::new();
         }
+        self.rebuild_graph();
     }
 
     fn select_note(&mut self, name: String) {

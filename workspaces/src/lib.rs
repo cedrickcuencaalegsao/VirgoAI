@@ -159,7 +159,7 @@ pub fn chat_id(note: &str) -> Option<String> {
 /// Not knowledge: instructions.md, the conversations/ copies, and old chat
 /// notes that earlier versions wrote at the project root.
 fn is_knowledge(name: &str) -> bool {
-    if name == INSTRUCTIONS || name.starts_with("conversations/") {
+    if name == INSTRUCTIONS {
         return false;
     }
     !(!name.contains('/') && chat_id(name).is_some())
@@ -177,21 +177,24 @@ pub fn notes(slug: &str) -> Vec<String> {
     names
 }
 
-/// The project's knowledge as memory notes (named `project/<file>`), for retrieval.
-/// Only this project's knowledge is returned: never conversations, never other projects.
-pub fn load_notes(slug: &str) -> Vec<Note> {
-    let Ok(store) = store(slug) else {
-        return Vec::new();
-    };
+/// Knowledge + saved conversations, skipping the chat currently open
+/// (its history is already sent, so recalling it would duplicate it).
+pub fn load_notes(slug: &str, skip_chat: Option<&str>) -> Vec<Note> {
+    let Ok(store) = store(slug) else { return Vec::new() };
     store
         .load_all()
         .into_iter()
         .filter(|n| is_knowledge(&n.name))
-        .map(|n| Note {
-            name: format!("project/{}", n.name),
-            content: n.content,
-        })
+        .filter(|n| skip_chat.map_or(true, |id| !n.name.ends_with(&format!("-{id}.md"))))
+        .map(|n| Note { name: format!("project/{}", n.name), content: n.content })
         .collect()
+}
+
+/// Save a general (non-project) chat as its own .md file in the global memory.
+pub fn save_chat_to(store: &MemoryStore, chat: &Chat) -> io::Result<()> {
+    let name = format!("conversations/{}", chat_file(&chat.title, &chat.id));
+    store.write(&name, &chat_markdown(chat))?;
+    Ok(())
 }
 
 /// Explicit memory workflow: append text to `memory/inbox.md` of the project.

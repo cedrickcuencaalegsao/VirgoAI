@@ -479,7 +479,7 @@ impl App {
             }
             Message::InputAction(action) => {
                 self.input_editor.perform(action);
-                self.input = self.input_editor.text();
+                self.input = self.input_editor.text().trim_end_matches('\n').to_string();
                 Task::none()
             }
             Message::Send => {

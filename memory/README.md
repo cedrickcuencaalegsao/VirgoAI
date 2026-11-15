@@ -1,47 +1,61 @@
-# Memory System
+# memory
 
-## Introduction
+Long-term memory for Virgo AI: markdown notes on disk, keyword retrieval into prompts, and a graph for the Memory screen.
 
-The memory system of the project is designed to manage and retrieve markdown notes efficiently. It consists of two main components: `MemoryStore` and `Note`. This document provides an overview of the system and details on how to use it.
+## Modules
 
-## MemoryStore
+### `store` — notes on disk
 
-The `MemoryStore` struct is responsible for managing markdown notes. It provides methods to ensure the existence of the memory folder, list all markdown files, read and write notes, and resolve note paths.
+`MemoryStore` manages a folder of `.md` files.
 
-### Key Methods
+| Method | Description |
+| --- | --- |
+| `new(dir)` / `dir()` | Create / get the folder path. |
+| `ensure()` | Creates the folder and seeds `profile.md` if no notes exist. |
+| `list()` | Relative names of `.md` files up to 3 folders deep, sorted. |
+| `read` / `write` / `append` / `delete` | Note operations. `write` and `append` create parent folders. |
+| `load_all()` | Every readable note as `Vec<Note>`. |
 
-- **`ensure()`**: Creates the memory folder if it doesn't exist and seeds a `profile.md` file if the folder is empty.
-- **`list()`**: Returns a list of relative names of all `.md` files in the memory folder.
-- **`read(name: &str)`**: Reads the content of a note by its relative name.
-- **`write(name: &str, content: &str)`**: Creates or overwrites a note with the specified content.
-- **`resolve(name: &str)`**: Resolves the absolute path of a note by its relative name.
+Free functions:
 
-### Usage Example
+- `normalize_name(input)` – turns user input into a safe relative path ending in `.md`. Rejects `.` and `..` segments so notes cannot escape the folder; unsafe characters become `-`.
+- `today()` – UTC date as `YYYY-MM-DD`, with no date crate.
 
-Here's how to use `MemoryStore::ensure` to create the memory folder if it doesn't exist:
+`Note { name, content }` – `name` is relative, e.g. `notes/rust.md`.
+
+### `retrieval` — what goes into the prompt
+
+```rust
+let text = retrieval::build_context(&notes, "how did we design the cache?", budget_chars);
+```
+
+1. **Always included** (if present): `profile.md` and `project/project.md`.
+2. **Everything else** is split at `## ` headings and scored by keyword hits (stop words and terms under 3 characters are ignored). A note whose file name contains a query term gets +5.
+3. Sections are added highest score first, each limited to 1,500 characters (a window around the first match), until the budget is used.
+
+Scoring is deliberately simple so embeddings can replace it without changing callers.
+
+### `graph` — the memory map
+
+`Graph::build(&notes)` produces nodes, edges and a layout:
+
+- **Groups** come from the top-level folder (`core` for `profile.md`/`user.md`, `inbox`, `notes` otherwise).
+- **Edges**: `[[note]]` and `[[note|label]]` links (matched by full path, path without `.md`, or bare name) are *explicit*. Notes with no links get a faint edge to the hub.
+- **Hub** is `profile.md` when it exists, otherwise the first note. It stays at the centre.
+- **Layout** is a small deterministic Fruchterman–Reingold simulation (80 steps); coordinates are in `-1.0..=1.0`.
+- `matches(query)` flags nodes containing the search text; `neighbors(i)` lists connected nodes.
+
+## Example
 
 ```rust
 use memory::store::MemoryStore;
 
-fn main() -> io::Result<()> {
-    let memory_store = MemoryStore::new(PathBuf::from("memory"));
-    memory_store.ensure()?;
-    Ok(())
-}
+let store = MemoryStore::new("memory".into());
+store.ensure()?;
+store.append("notes/rust.md", "- Prefer `?` over unwrap")?;
+let graph = memory::graph::Graph::build(&store.load_all());
 ```
 
-## Note
+## Dependencies
 
-The `Note` struct represents a markdown file. It contains the relative path of the file (`name`) and its content (`content`).
-
-## Documentation
-
-The memory system is fully documented in the following files:
-
-- `memory/src/store.rs`: Contains the implementation of `MemoryStore`.
-- `memory/src/retrieval.rs`: Contains the implementation of `build_context`, `push_block`, and `tokenize`.
-
-For more detailed information, refer to the source code.
-```
-
-Please review the updated `memory/README.md` to ensure it meets your requirements. If necessary, make further adjustments.
+`walkdir`.

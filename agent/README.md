@@ -1,163 +1,67 @@
-# Agent Project Documentation
+# agent
 
-## Table of Contents
+Chat data types and the prompt-building pipeline that drives Virgo AI's two-stage (planner → executor) workflow.
 
-1. **lib.rs**
-2. **pipeline.rs**
-3. **Cargo.toml**
+This crate builds requests; it does not send them. Sending and streaming is done by [`ollama`](../ollama), and orchestration lives in [`app`](../app).
 
----
+## What's inside
 
-## lib.rs
+### `lib.rs`
 
-### Module and Structs
+| Item | Purpose |
+| --- | --- |
+| `Role` | `User`, `Plan` (planner output), `Assistant` (executor output), `Error`. |
+| `ChatMessage` | One chat bubble: `role`, `content`, `thinking` (reasoning, kept separate), `think_secs`, `files` (project files attached), and `show_thinking` (UI-only, not serialized). |
+| `ChatMessage::new` / `with_files` | Constructors. |
 
-- **Module: pipeline**
-  - **Struct: ChatMessage**
-    - **Fields:**
-      - `role`: Role (User/Plan/Assistant/Error)
-      - `content`: String
-      - `thinking`: String (default empty)
-      - `think_secs`: Option<f32> (default None)
-      - `show_thinking`: bool (default false)
-      - `files`: Vec<String> (default empty)
-    - **Methods:**
-      - `new(role: Role, content: impl Into<String>) -> Self`
-      - `with_files(mut self, files: Vec<String>) -> Self`
+### `pipeline.rs`
 
-- **Struct: Role**
-  - **Variants:**
-    - User
-    - Plan
-    - Assistant
-    - Error
+**Intent**
 
-### Functions
+- `Intent::Answer` – a question or explanation.
+- `Intent::Change` – a code change (plan → user review → edit blocks).
+- `classify(text, has_project)` – keyword heuristic: with no project it is always `Answer`; question openers (`what`, `why`, `explain`…) force `Answer`; action verbs (`add`, `fix`, `refactor`…) give `Change`.
 
-- **Function: classify(text: &str, has_project: bool) -> Intent**
-  - **Logic:**
-    - Determines the request type (Answer/Change) based on the text and whether a project is present.
+**Request builders** (all return an `ollama::types::ChatRequest`)
 
-- **Function: parse_edits(reply: &str, known: &[String], default_file: Option<&str>) -> Vec<Proposal>**
-  - **Logic:**
-    - Parses `FILE:` + SEARCH/REPLACE blocks from the executor's reply.
+| Function | Stage |
+| --- | --- |
+| `planner_request(cfg, pending)` | Streaming planner call. Adds a change-specific suffix when `intent == Change`. |
+| `executor_request(cfg, pending, plan)` | Streaming executor call. Appends the edit protocol when a project is open, and the plan if there is one. |
+| `scout_request(cfg, pending)` | Non-streaming call asking the planner which files to read (`think: false`). |
+| `line_edit_request(cfg, doc, line, instruction)` | Non-streaming call to rewrite a single line in the code panel. |
 
-- **Function: file_from_line(t: &str, known: &[String]) -> Option<String>**
-  - **Logic:**
-    - Identifies the file from a line that names a file.
+System prompts are layered in this order: base prompt → project instructions → memory notes → project context → (executor only) edit protocol → plan.
 
-### Structs and Enums
+**Parsers and helpers**
 
-- **Struct: Proposal**
-  - **Fields:**
-    - `file`: String
-    - `search`: String
-    - `replace`: String
+- `parse_scout(reply)` – turns the scout's reply into a list of paths (strips bullets, numbering, backticks).
+- `parse_line_edit(reply, original)` – extracts the replacement from a fenced code block; empty block means "delete the line". Restores indentation the model dropped (`fix_indent`).
+- `parse_edits(reply, known, default_file)` – legacy `FILE:` + SEARCH/REPLACE parser, tolerant of markdown decoration. The current flow uses [`workspace`](../workspace) fenced blocks instead.
+- `history_from(messages)` – last 10 user/assistant turns; plans and errors are dropped.
+- `strip_think_tags(text)` – removes inline `<think>…</think>` blocks.
 
-- **Enum: Intent**
-  - **Variants:**
-    - Answer
-    - Change
+**Data**
 
----
+- `Pending` – everything captured when the user presses Send (task, memory, history, project context, intent, instructions), held until the executor starts.
+- `Proposal` – one SEARCH/REPLACE block (`file`, `search`, `replace`).
 
-## pipeline.rs
+## The edit protocol
 
-### Module and Structs
+When a project is open, the executor is told to reply with fenced blocks:
 
-- **Struct: Pending**
-  - **Fields:**
-    - `task`: String
-    - `memory`: String
-    - `history`: Vec<ChatMsg>
-    - `project`: String
-    - `intent`: Intent
-    - `instructions`: String
+````
+```edit src/main.rs
+<<<<<<< SEARCH
+exact lines from the current file
+=======
+replacement lines
+>>>>>>> REPLACE
+```
+````
 
-- **Struct: ChatMsg**
-  - **Methods:**
-    - `user(content: impl Into<String>) -> Self`
-    - `assistant(content: impl Into<String>) -> Self`
-    - `system(content: impl Into<String>) -> Self`
+Also supported: ` ```delete path ``` ` and ` ```run ` with one shell command. These are parsed and applied by [`workspace`](../workspace).
 
-- **Struct: ChatRequest**
-  - **Fields:**
-    - `messages`: Vec<ChatMsg>
-    - `system`: String
-    - `options`: Options
+## Dependencies
 
-- **Struct: Options**
-  - **Fields:**
-    - `temperature`: f32
-    - `max_tokens`: usize
-
-### Enums
-
-- **Enum: StreamEvent**
-  - **Variants:**
-    - Message: ChatMsg
-    - Error: String
-
-### Functions
-
-- **Function: planner_request(cfg: &Config, pending: &Pending) -> ChatRequest**
-  - **Logic:**
-    - Constructs a chat request for the planner stage.
-
-- **Function: executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> ChatRequest**
-  - **Logic:**
-    - Constructs a chat request for the executor stage.
-
-- **Function: line_edit_request(cfg: &Config, pending: &Pending) -> ChatRequest**
-  - **Logic:**
-    - Constructs a chat request for line editing.
-
-- **Function: parse_line_edit(reply: &str, original: &str) -> Result<Vec<String>, String>**
-  - **Logic:**
-    - Parses the reply from the line editing stage.
-
-- **Function: fix_indent(original: &str, replacement: Vec<String>) -> Vec<String>**
-  - **Logic:**
-    - Fixes the indentation of the replacement lines.
-
-- **Function: append_memory(system: &mut String, memory: &str)**
-  - **Logic:**
-    - Appends memory to the system prompt.
-
-- **Function: append_instructions(system: &mut String, instructions: &str)**
-  - **Logic:**
-    - Appends instructions to the system prompt.
-
-- **Function: append_project(system: &mut String, project: &str)**
-  - **Logic:**
-    - Appends project details to the system prompt.
-
-- **Function: strip_think_tags(text: &str) -> String**
-  - **Logic:**
-    - Strips think tags from the text.
-
----
-
-## Cargo.toml
-
-### Package Metadata
-
-- **Name:** agent
-- **Version:** 0.1.0
-- **Edition:** 2024
-
-### Dependencies
-
-- **serde:** { version = "1", features = ["derive"] }
-- **code:** { path = "../code" }
-- **config:** { path = "../config" }
-- **ollama:** { path = "../ollama" }
-
-### Module Structure
-
-- **Modules:**
-  - pipeline
-  - code
-  - config
-  - ollama
-  - README.md
+`serde`, [`code`](../code), [`config`](../config), [`ollama`](../ollama).

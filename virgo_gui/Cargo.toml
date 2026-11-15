@@ -1,9 +1,10 @@
 [package]
 name = "virgo_gui"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [dependencies]
+fuzzy-matcher = "0.3"
 iced = { version = "0.13", features = ["tokio", "svg", "canvas"] }
 icon_manager = { path = "../icon_manager" }
 workspace = { path = "../workspace" }

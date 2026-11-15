@@ -1,7 +1,7 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text_editor::{Binding, Status};
 use iced::widget::{
-    Space, button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
+    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
     text_editor,
 };
 use iced::{Element, Length, Theme, keyboard};
@@ -50,79 +50,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .style(style::pick),
         );
 
-    let mode = if app.cfg.use_planner {
-        "Plan first, then answer"
-    } else {
-        "Direct answer"
-    };
-    let subtitle = match app.chat_workspace_name() {
-        Some(name) => format!("{mode} · Project: {name}"),
-        None => mode.to_string(),
-    };
-
-    let panel_color = if app.show_panel {
-        icon_manager::accent()
-    } else {
-        icon_manager::muted()
-    };
-    let terminal_color = if app.show_terminal {
-        icon_manager::accent()
-    } else {
-        icon_manager::muted()
-    };
-
-    let back: Element<'_, Message> = match app.chat_workspace() {
-        Some(slug) => button(icon_manager::label(
-            icon_manager::folder_kanban(),
-            "Project",
-            12,
-            icon_manager::muted(),
-        ))
-        .padding([7, 12])
-        .on_press(Message::OpenWorkspace(slug))
-        .style(style::ghost_button)
-        .into(),
-        None => Space::new(Length::Shrink, Length::Shrink).into(),
-    };
-
-    let top = row![
-        column![
-            text("Conversation").size(22).font(style::bold()),
-            text(short(&subtitle, 40)).size(12).style(style::dim),
-        ]
-        .spacing(2),
-        horizontal_space(),
-        back,
-        button(icon_manager::tint(
-            icon_manager::refresh_cw(),
-            16.0,
-            icon_manager::muted()
-        ))
-        .padding(8)
-        .on_press(Message::RefreshModels)
-        .style(style::ghost_button),
-        button(icon_manager::tint(
-            icon_manager::terminal(),
-            18.0,
-            terminal_color
-        ))
-        .padding(8)
-        .on_press(Message::ToggleTerminal)
-        .style(style::ghost_button),
-        button(icon_manager::tint(
-            icon_manager::panel_right(),
-            18.0,
-            panel_color
-        ))
-        .padding(8)
-        .on_press(Message::TogglePanel)
-        .style(style::ghost_button),
-    ]
-    .spacing(6)
-    .align_y(Vertical::Center);
-
     // Model pickers get their own row, so they never get squeezed.
-    let header = column![top, pickers].spacing(10);
+    let header = column![pickers].spacing(10);
 
     // ---- messages (centred reading column) ----
     let body: Element<'_, Message> = if app.messages.is_empty() {

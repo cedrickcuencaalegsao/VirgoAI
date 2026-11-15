@@ -1,13 +1,18 @@
 pub mod actions;
 pub mod chat;
 pub mod code_panel;
+pub mod dock;
 pub mod markdown;
 pub mod memory;
 pub mod nav;
+pub mod palette;
 pub mod project_panel;
+pub mod rail;
 pub mod settings;
 pub mod sidebar;
+pub mod status_bar;
 pub mod terminal_panel;
+pub mod top_bar;
 pub mod workspaces;
 
 /// Shorten text so it fits on one line, adding `...` when cut.

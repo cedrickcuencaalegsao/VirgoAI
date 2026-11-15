@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use iced::widget::{scrollable, text_editor};
-use iced::{Subscription, Task, Theme};
+use iced::{Subscription, Task, Theme, keyboard};
 
 use terminal::{self, RunResult};
 use workspace::{self, Action, ChangeSet};
@@ -44,6 +44,27 @@ pub enum Phase {
     Scouting,
     Planning,
     Executing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dock {
+    Files,
+    Changes,
+    Memory,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    NewChat,
+    TogglePanel,
+    ToggleTerminal,
+    OpenSettings,
+    OpenMemory,
+    OpenProjects,
+    RefreshModels,
+    RevertLast,
+    ToggleEditMode,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +189,13 @@ pub enum Message {
     TermSubmit,
     TermClear,
     ToggleAutoApply(bool),
+
+    TogglePalette,
+    ClosePalette,
+    PaletteQuery(String),
+    PaletteRun(Command),
+    SetDock(Dock),
+    Flush,
 }
 
 pub struct App {
@@ -270,6 +298,11 @@ pub struct App {
     pub memory_query: String,
     pub memory_filter: Option<usize>,
     pub memory_hover: Option<usize>,
+
+    pub dock: Dock,
+    pub palette_open: bool,
+    pub palette_query: String,
+    stream_buf: String, // coalesced tokens
 }
 
 impl App {
@@ -355,6 +388,10 @@ impl App {
             memory_query: String::new(),
             memory_filter: None,
             memory_hover: None,
+            dock: Dock::Files,
+            palette_open: false,
+            palette_query: String::new(),
+            stream_buf: String::new(),
         };
 
         let task = Task::perform(client::list_all_models(endpoints), Message::ModelsLoaded);
@@ -366,11 +403,12 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
+        let mut subs = vec![keyboard::on_key_press(shortcut)];
         if self.is_working() {
-            iced::time::every(Duration::from_millis(400)).map(|_| Message::Tick)
-        } else {
-            Subscription::none()
+            subs.push(iced::time::every(Duration::from_millis(400)).map(|_| Message::Tick));
+            subs.push(iced::time::every(Duration::from_millis(40)).map(|_| Message::Flush));
         }
+        Subscription::batch(subs)
     }
 
     /// A model is streaming right now.
@@ -958,6 +996,50 @@ impl App {
                 self.editor = text_editor::Content::new();
                 Task::none()
             }
+            Message::Flush => {
+                if self.stream_buf.is_empty() {
+                    return Task::none();
+                }
+                self.flush_stream();
+                scroll_to_end()
+            }
+            Message::TogglePalette => {
+                self.palette_open = !self.palette_open;
+                self.palette_query.clear();
+                Task::none()
+            }
+            Message::ClosePalette => {
+                self.palette_open = false;
+                self.palette_query.clear();
+                Task::none()
+            }
+            Message::PaletteQuery(value) => {
+                self.palette_query = value;
+                Task::none()
+            }
+            Message::SetDock(dock) => {
+                self.dock = dock;
+                self.show_panel = true;
+                Task::none()
+            }
+            Message::PaletteRun(cmd) => {
+                self.palette_open = false;
+                self.palette_query.clear();
+                match cmd {
+                    Command::NewChat => self.update(Message::NewChat),
+                    Command::TogglePanel => self.update(Message::TogglePanel),
+                    Command::ToggleTerminal => self.update(Message::ToggleTerminal),
+                    Command::OpenSettings => self.update(Message::Navigate(Screen::Settings)),
+                    Command::OpenMemory => self.update(Message::Navigate(Screen::Memory)),
+                    Command::OpenProjects => self.update(Message::Navigate(Screen::Projects)),
+                    Command::RefreshModels => self.update(Message::RefreshModels),
+                    Command::RevertLast => self.update(Message::RevertLast),
+                    Command::ToggleEditMode => {
+                        let next = !self.edit_mode;
+                        self.update(Message::ToggleEditMode(next))
+                    }
+                }
+            }
         }
     }
 
@@ -1114,15 +1196,26 @@ impl App {
                 self.append_thinking(&chunk);
                 scroll_to_end()
             }
-            StreamEvent::Token(token) => {
-                self.append_content(&token);
-                if token.contains('`') {
-                    self.apply_streamed(false);
-                }
-                scroll_to_end()
+            StreamEvent::Token(t) => {
+                self.stream_buf.push_str(&t);
+                Task::none()
             }
-            StreamEvent::Done => self.on_stage_done(),
+            StreamEvent::Done => {
+                self.flush_stream();
+                self.on_stage_done()
+            }
             StreamEvent::Error(error) => self.fail(error),
+        }
+    }
+
+    fn flush_stream(&mut self) {
+        if self.stream_buf.is_empty() {
+            return;
+        }
+        let buf = std::mem::take(&mut self.stream_buf);
+        self.append_content(&buf);
+        if buf.contains('`') {
+            self.apply_streamed(false);
         }
     }
 
@@ -1240,6 +1333,7 @@ impl App {
     }
 
     fn stop(&mut self) -> Task<Message> {
+        self.stream_buf.clear();
         if let Some(handle) = self.abort.take() {
             handle.abort();
         }
@@ -1254,6 +1348,7 @@ impl App {
 
     fn fail(&mut self, error: String) -> Task<Message> {
         // Drop an empty bubble left behind by a failed stream.
+        self.stream_buf.clear();
         let empty_bubble = matches!(
             self.messages.last(),
             Some(m) if matches!(m.role, Role::Assistant | Role::Plan)
@@ -1469,7 +1564,6 @@ impl App {
             .map(|(i, c)| i + c.len_utf8())
             .unwrap_or(0);
         self.input.truncate(start);
-        self.input.push_str(&format!("@{rel} "));
         self.input.push_str(&format!("@{rel} "));
         self.input_editor = text_editor::Content::with_text(&self.input);
         self.input_editor
@@ -2437,6 +2531,20 @@ impl App {
 
 fn scroll_to_end() -> Task<Message> {
     scrollable::snap_to(shared::chat_scroll_id(), scrollable::RelativeOffset::END)
+}
+
+fn shortcut(key: keyboard::Key, mods: keyboard::Modifiers) -> Option<Message> {
+    use keyboard::Key;
+    use keyboard::key::Named;
+
+    match key.as_ref() {
+        Key::Character("k") if mods.command() => Some(Message::TogglePalette),
+        Key::Character("n") if mods.command() => Some(Message::NewChat),
+        Key::Character("b") if mods.command() => Some(Message::TogglePanel),
+        Key::Character("j") if mods.command() => Some(Message::ToggleTerminal),
+        Key::Named(Named::Escape) => Some(Message::ClosePalette),
+        _ => None,
+    }
 }
 
 /// Native "choose folder" dialog.

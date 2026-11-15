@@ -100,7 +100,7 @@ dependencies = [
 
 [[package]]
 name = "app"
-version = "0.1.2"
+version = "0.1.4"
 dependencies = [
  "agent",
  "chats",
@@ -1382,6 +1382,15 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "fuzzy-matcher"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54614a3312934d066701a80f20f15fa3b56d67ac7722b39eea5b4c9dd1d66c94"
+dependencies = [
+ "thread_local",
 ]
 
 [[package]]
@@ -4058,7 +4067,7 @@ dependencies = [
 
 [[package]]
 name = "style"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "iced",
 ]
@@ -4246,6 +4255,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "thread_local"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -4699,7 +4717,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "virgo-ai"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "app",
  "iced",
@@ -4709,13 +4727,14 @@ dependencies = [
 
 [[package]]
 name = "virgo_gui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent",
  "app",
  "chats",
  "code",
  "config",
+ "fuzzy-matcher",
  "iced",
  "icon_manager",
  "memory",

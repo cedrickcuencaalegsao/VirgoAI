@@ -7,7 +7,7 @@
 use iced::font::{self, Weight};
 use iced::theme::Palette;
 use iced::widget::{button, container, pick_list, scrollable, text, text_editor, text_input};
-use iced::{gradient, Background, Border, Color, Font, Gradient, Shadow, Theme, Vector};
+use iced::{Background, Border, Color, Font, Gradient, Shadow, Theme, gradient};
 
 // ---------------------------------------------------------------------------
 // Spacing and radius scale (use these instead of ad-hoc numbers)
@@ -19,8 +19,8 @@ pub const SP_3: f32 = 12.0;
 pub const SP_4: f32 = 16.0;
 pub const SP_6: f32 = 24.0;
 
-pub const R_CONTROL: f32 = 12.0;
-pub const R_PANEL: f32 = 20.0;
+pub const R_CONTROL: f32 = 8.0;
+pub const R_PANEL: f32 = 12.0;
 
 /// Width of the centred reading column in the chat.
 pub const READING_WIDTH: f32 = 780.0;
@@ -30,36 +30,35 @@ pub const READING_WIDTH: f32 = 780.0;
 // ---------------------------------------------------------------------------
 
 pub fn bg() -> Color {
-    Color::from_rgb8(0x0B, 0x13, 0x24)
+    Color::from_rgb8(0x1E, 0x1E, 0x1E)
 }
 pub fn sidebar_bg() -> Color {
-    Color::from_rgb8(0x0F, 0x1A, 0x33)
+    bg()
 }
 pub fn surface() -> Color {
-    Color::from_rgb8(0x14, 0x21, 0x3D)
+    Color::from_rgb8(0x2B, 0x2B, 0x2B)
 }
-/// Raised level above `surface` (a lighter step of the same navy).
 pub fn surface_2() -> Color {
-    Color::from_rgb8(0x1A, 0x29, 0x4A)
+    Color::from_rgb8(0x32, 0x32, 0x32)
+}
+pub fn live() -> Color {
+    Color::from_rgb8(0x9C, 0xC2, 0xFF)
 }
 pub fn gold() -> Color {
-    Color::from_rgb8(0xFC, 0xA3, 0x11)
-}
+    live()
+} // old call sites now use the accent
 pub fn gold_hi() -> Color {
-    Color::from_rgb8(0xFF, 0xB8, 0x3A)
+    Color::from_rgb8(0xBB, 0xD6, 0xFF)
 }
-/// Text colour on gold surfaces.
 pub fn on_gold() -> Color {
     bg()
+}
+fn line() -> Color {
+    Color::from_rgb8(0x3A, 0x3A, 0x3A)
 }
 
 pub fn alpha(color: Color, a: f32) -> Color {
     Color { a, ..color }
-}
-
-/// Hairline used for borders and dividers.
-fn line() -> Color {
-    alpha(Color::WHITE, 0.06)
 }
 
 pub fn palette() -> Palette {
@@ -132,14 +131,6 @@ fn layer(background: Color, border: Color, radius: f32, shadow: Shadow) -> conta
     }
 }
 
-fn soft_shadow(a: f32, y: f32, blur: f32) -> Shadow {
-    Shadow {
-        color: alpha(Color::BLACK, a),
-        offset: Vector::new(0.0, y),
-        blur_radius: blur,
-    }
-}
-
 pub fn sidebar(_theme: &Theme) -> container::Style {
     container::Style {
         background: Some(Background::Color(sidebar_bg())),
@@ -148,8 +139,8 @@ pub fn sidebar(_theme: &Theme) -> container::Style {
 }
 
 /// Main panels: raised surface, hairline border, soft shadow.
-pub fn card(_theme: &Theme) -> container::Style {
-    layer(surface(), line(), R_PANEL, soft_shadow(0.22, 6.0, 20.0))
+pub fn card(_t: &Theme) -> container::Style {
+    layer(surface(), line(), R_PANEL, Shadow::default())
 }
 
 /// A recessed box inside the sidebar or a panel.
@@ -162,15 +153,10 @@ pub fn inset(_theme: &Theme) -> container::Style {
     )
 }
 
-pub fn user_bubble(_theme: &Theme) -> container::Style {
+pub fn user_bubble(_t: &Theme) -> container::Style {
     container::Style {
-        text_color: Some(on_gold()),
-        ..layer(
-            gold(),
-            Color::TRANSPARENT,
-            20.0,
-            soft_shadow(0.20, 4.0, 14.0),
-        )
+        text_color: Some(Color::from_rgb8(0xE0, 0xE0, 0xE0)),
+        ..layer(surface_2(), line(), 14.0, Shadow::default())
     }
 }
 
@@ -230,17 +216,8 @@ pub fn row_selected(_theme: &Theme) -> container::Style {
 }
 
 /// The floating chat composer (2px gold border).
-pub fn composer(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(surface_2())),
-        border: Border {
-            color: gold(), // full orange, no transparency
-            width: 2.0,
-            radius: 26.0.into(),
-        },
-        shadow: soft_shadow(0.35, 10.0, 30.0),
-        ..container::Style::default()
-    }
+pub fn composer(_t: &Theme) -> container::Style {
+    layer(surface(), line(), 14.0, Shadow::default())
 }
 
 /// Slim pill, e.g. for the status line.
@@ -279,6 +256,51 @@ pub fn scroll(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
         };
     }
     style
+}
+
+pub fn dim_color() -> Color {
+    Color::from_rgb8(0x84, 0x84, 0x84)
+}
+
+pub fn rail(_t: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(bg())),
+        border: Border {
+            color: line(),
+            width: 1.0,
+            radius: 0.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+pub fn status_bar(t: &Theme) -> container::Style {
+    rail(t)
+}
+
+pub fn overlay_scrim(_t: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(alpha(Color::BLACK, 0.55))),
+        ..container::Style::default()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum StageState {
+    Idle,
+    Live,
+    Done,
+}
+
+pub fn stage(state: StageState) -> impl Fn(&Theme) -> container::Style {
+    move |_t: &Theme| {
+        let (fill, outline) = match state {
+            StageState::Live => (alpha(live(), 0.14), alpha(live(), 0.6)),
+            StageState::Done => (Color::TRANSPARENT, line()),
+            StageState::Idle => (Color::TRANSPARENT, Color::TRANSPARENT),
+        };
+        layer(fill, outline, 999.0, Shadow::default())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -477,7 +499,11 @@ pub fn plan_editor(theme: &Theme, status: text_editor::Status) -> text_editor::S
     };
     text_editor::Style {
         background: Background::Color(bg()),
-        border: Border { color: border, width: 1.5, radius: R_CONTROL.into() },
+        border: Border {
+            color: border,
+            width: 1.5,
+            radius: R_CONTROL.into(),
+        },
         icon: alpha(p.text, 0.6),
         placeholder: alpha(p.text, 0.4),
         value: p.text,
@@ -510,8 +536,6 @@ pub fn pick(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
     };
     style
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Memory map
@@ -550,7 +574,12 @@ pub fn map_area(_theme: &Theme) -> container::Style {
 
 /// Small number box (Notes / Links / Words).
 pub fn stat_pill(_theme: &Theme) -> container::Style {
-    layer(alpha(Color::WHITE, 0.04), line(), R_CONTROL, Shadow::default())
+    layer(
+        alpha(Color::WHITE, 0.04),
+        line(),
+        R_CONTROL,
+        Shadow::default(),
+    )
 }
 
 /// A note in the list: soft card, gold outline when selected.
@@ -565,7 +594,11 @@ pub fn note_card(active: bool) -> impl Fn(&Theme, button::Status) -> button::Sty
         button::Style {
             background: Some(Background::Color(fill)),
             text_color: theme.palette().text,
-            border: Border { color: outline, width: 1.0, radius: R_CONTROL.into() },
+            border: Border {
+                color: outline,
+                width: 1.0,
+                radius: R_CONTROL.into(),
+            },
             shadow: Shadow::default(),
         }
     }
@@ -580,12 +613,20 @@ pub fn filter_chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::S
         } else if hovered {
             (alpha(Color::WHITE, 0.08), theme.palette().text, line())
         } else {
-            (alpha(Color::WHITE, 0.04), alpha(theme.palette().text, 0.75), line())
+            (
+                alpha(Color::WHITE, 0.04),
+                alpha(theme.palette().text, 0.75),
+                line(),
+            )
         };
         button::Style {
             background: Some(Background::Color(fill)),
             text_color,
-            border: Border { color: outline, width: 1.0, radius: 999.0.into() },
+            border: Border {
+                color: outline,
+                width: 1.0,
+                radius: 999.0.into(),
+            },
             shadow: Shadow::default(),
         }
     }

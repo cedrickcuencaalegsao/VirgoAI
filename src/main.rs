@@ -1,4 +1,4 @@
-use iced::widget::{column, container, row, text};
+use iced::widget::{column, container, row, stack};
 use iced::{Element, Length};
 
 use app::{App, Message};
@@ -16,10 +16,6 @@ fn main() -> iced::Result {
         .run_with(App::new)
 }
 
-// -----------------------------------------------------------------------
-// View
-// -----------------------------------------------------------------------
-
 fn view(app: &App) -> Element<'_, Message> {
     let page: Element<'_, Message> = match app.screen {
         app::Screen::Chat => {
@@ -29,11 +25,9 @@ fn view(app: &App) -> Element<'_, Message> {
                 Length::Fill
             };
 
-            let mut panels = row![
-                container(virgo_gui::chat::view(app))
-                    .width(chat_width)
-                    .height(Length::Fill)
-            ]
+            let mut panels = row![container(virgo_gui::chat::view(app))
+                .width(chat_width)
+                .height(Length::Fill)]
             .spacing(14)
             .height(Length::Fill);
 
@@ -46,7 +40,7 @@ fn view(app: &App) -> Element<'_, Message> {
             }
 
             if app.show_panel {
-                panels = panels.push(virgo_gui::project_panel::view(app));
+                panels = panels.push(virgo_gui::dock::view(app));
             }
 
             let panels: Element<'_, Message> = panels.into();
@@ -66,21 +60,27 @@ fn view(app: &App) -> Element<'_, Message> {
 
         app::Screen::Memory => virgo_gui::memory::view(app),
         app::Screen::Settings => virgo_gui::settings::view(app),
-        app::Screen::Projects | app::Screen::Project => {
-            virgo_gui::workspaces::view(app)
-        }
+        app::Screen::Projects | app::Screen::Project => virgo_gui::workspaces::view(app),
     };
 
-    let footer = text(app.status.as_str())
-        .size(12)
-        .style(style::dim);
+    let center = column![
+        virgo_gui::top_bar::view(app),
+        container(page).height(Length::Fill).padding([0, 14]),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill);
 
-    let content = column![container(page).height(Length::Fill), footer]
-        .spacing(8)
-        .padding(18)
-        .width(Length::Fill);
+    let shell = row![
+        virgo_gui::rail::view(app),
+        column![center, virgo_gui::status_bar::view(app)]
+            .width(Length::Fill)
+            .height(Length::Fill),
+    ]
+    .height(Length::Fill);
 
-    row![virgo_gui::nav::view(app), content]
-        .height(Length::Fill)
-        .into()
+    if app.palette_open {
+        stack![shell, virgo_gui::palette::view(app)].into()
+    } else {
+        shell.into()
+    }
 }

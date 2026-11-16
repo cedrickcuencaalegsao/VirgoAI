@@ -1,4 +1,5 @@
 use super::{ChatMessage, Role};
+use crate::plan::{self, Step};
 use code::CodeDoc;
 use config::Config;
 use ollama::types::{ChatMsg, ChatRequest, Options};
@@ -37,14 +38,23 @@ pub enum Intent {
     Change,
 }
 
-const PLANNER_CHANGE_SUFFIX: &str = "\n\nThe user wants the code changed. You are given a project \
-map (every file with its main definitions) and the full contents of the files most relevant to the \
-request. Plan against the real code: reuse existing functions and types by name, follow the \
-project's conventions, and never invent files or functions that are not shown. Write numbered \
-steps in dependency order. Start each step with `- path/to/file:` using exact relative paths from \
-the map, name the function or struct to change, and say what changes. Mark a file that does not \
-exist yet with (new). If you need a file that was not shown, list it under 'Need to check' \
-instead of guessing.";
+/// Change requests: the planner answers with ONE JSON object (see `plan::schema`).
+/// The format rules here override the "numbered plan" wording of `PLANNER_SYSTEM`.
+const PLANNER_CHANGE_SUFFIX: &str = r#"
+
+The user wants the code changed. You are given a project map (every file with its main definitions) and the full contents of the files most relevant to the request. Plan against the real code: reuse existing functions and types by name and follow the project's conventions.
+
+OUTPUT FORMAT (this overrides the format above). Reply with ONLY one JSON object, no prose and no code fence:
+{"goal": "one sentence", "steps": [{"id": 1, "file": "exact/relative/path.rs", "is_new": false, "target": "existing fn or struct this change touches or sits next to", "anchor": "one existing line of the file near the change, copied verbatim", "change": "what changes, one or two sentences", "depends_on": [], "verify": ""}], "need_to_check": []}
+
+Rules:
+- One step = ONE file = ONE logical change. At most 7 steps, in dependency order.
+- Use exact paths from the project map. Never invent files or functions.
+- The anchor must be a line that really exists in the file contents shown above. Copy it exactly.
+- For a file that does not exist yet set is_new to true and leave target and anchor empty.
+- depends_on lists the ids of earlier steps this step needs.
+- Put a shell command such as `cargo check` in verify on the LAST step only, otherwise leave it empty.
+- If you need a file that was not shown, list its path in need_to_check instead of guessing."#;
 
 const SCOUT_SYSTEM: &str = "You are the scouting stage of a coding assistant. You get a map of a \
 project (files with their main definitions) and a request. Reply with ONLY the relative paths of \
@@ -75,6 +85,20 @@ file write a block ```delete path/to/file``` with nothing inside. Only edit file
 were provided. To verify your work you may add a block with the info string `run` containing ONE \
 shell command (for example `cargo check`); the user will approve it and you will receive the output.";
 
+/// Appended to the system prompt of a single plan step.
+const STEP_RULES: &str = "# This turn: ONE plan step\n\
+You are carrying out a single step of an approved plan. Write exactly ONE `edit` block, for the \
+file named in the step (several SEARCH/REPLACE pairs inside that block are fine). Do not touch \
+other files and do not repeat steps that are already done. SEARCH text must be copied exactly \
+from the CURRENT file contents given below, which already include the earlier steps. Do not add \
+`run` blocks. After the block write nothing else.";
+
+const REPAIR_SYSTEM: &str = "You fix JSON plans for a coding assistant. You get the user's \
+request, the project files, a previous plan and a list of problems found by an automatic checker. \
+Return the corrected plan as ONE JSON object with the same shape as before and nothing else. \
+Change only what is needed to fix the problems. Paths must exist in the project, and every anchor \
+must be a line copied exactly from the file contents provided. One step = one file = one logical \
+change, at most 7 steps.";
 
 /// One search/replace block proposed by the model.
 #[derive(Debug, Clone)]
@@ -240,11 +264,12 @@ pub fn history_from(messages: &[ChatMessage]) -> Vec<ChatMsg> {
 }
 
 pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
+    let change = pending.intent == Intent::Change;
     let mut system = String::from(PLANNER_SYSTEM);
-    if pending.intent == Intent::Change {
+    if change {
         system.push_str(PLANNER_CHANGE_SUFFIX);
     }
-    append_instructions(&mut system, &pending.instructions); // <- new
+    append_instructions(&mut system, &pending.instructions);
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
 
@@ -257,9 +282,125 @@ pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
         messages,
         stream: true,
         think: cfg.planner_think.then_some(true),
-        options: Options {
-            num_ctx: cfg.num_ctx,
-        },
+        // Change plans must be JSON that follows the schema. The model's own
+        // temperature is kept: thinking models behave badly at 0.
+        format: change.then(plan::schema),
+        options: Options::new(cfg.num_ctx, None),
+        keep_alive: cfg.keep_alive.clone(),
+    }
+}
+
+/// Non-streaming call: ask the planner to fix a plan the checker rejected.
+/// `context` is the project text the planner already saw (map + file contents).
+pub fn repair_request(
+    cfg: &Config,
+    task: &str,
+    context: &str,
+    previous: &str,
+    problems: &[String],
+) -> ChatRequest {
+    let list = problems
+        .iter()
+        .map(|p| format!("- {p}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let user = format!(
+        "# Request\n{task}\n\n# Project\n{context}\n\n# Previous plan\n{previous}\n\n\
+         # Problems found\n{list}\n\nReturn the corrected plan as JSON."
+    );
+    ChatRequest {
+        model: cfg.planner_model.clone(),
+        messages: vec![ChatMsg::system(REPAIR_SYSTEM), ChatMsg::user(user)],
+        stream: false,
+        think: Some(false),
+        format: Some(plan::schema()),
+        options: Options::new(cfg.num_ctx, Some(0.0)),
+        keep_alive: cfg.keep_alive.clone(),
+    }
+}
+
+/// What the executor needs to carry out ONE step.
+pub struct StepInput<'a> {
+    pub project_name: &'a str,
+    pub instructions: &'a str,
+    pub task: &'a str,
+    pub goal: &'a str,
+    pub step: &'a Step,
+    pub total: usize,
+    /// One line per step that is already applied.
+    pub done: &'a [String],
+    /// The step's file as a fenced block, read from disk right now.
+    pub file_ctx: &'a str,
+    /// Why the previous attempt at this step failed.
+    pub retry_error: Option<&'a str>,
+}
+
+/// Streaming executor call for a single plan step. The prompt is small on purpose:
+/// no history, no memory, no repo map, only this step and the file's current text.
+/// The stable system part comes first so Ollama can reuse its prompt cache.
+pub fn step_request(cfg: &Config, input: &StepInput) -> ChatRequest {
+    let mut system = String::from(EDIT_SYSTEM);
+    append_instructions(&mut system, input.instructions);
+    system.push_str("\n\n");
+    system.push_str(EDIT_PROTOCOL);
+    system.push_str("\n\n");
+    system.push_str(STEP_RULES);
+
+    let s = input.step;
+    let mut user = format!("Folder: {}\n\n# Request\n{}\n", input.project_name, input.task);
+    if !input.goal.is_empty() {
+        user.push_str(&format!("\n# Plan goal\n{}\n", input.goal));
+    }
+
+    user.push_str("\n# Done so far\n");
+    if input.done.is_empty() {
+        user.push_str("(nothing yet)\n");
+    } else {
+        for line in input.done {
+            user.push_str(&format!("- {line}\n"));
+        }
+    }
+
+    user.push_str(&format!(
+        "\n# Current step {}/{}\nFile: {} ({})\n",
+        s.id,
+        input.total,
+        s.file,
+        if s.is_new { "new file" } else { "existing file" }
+    ));
+    if !s.target.is_empty() {
+        user.push_str(&format!("Target: {}\n", s.target));
+    }
+    if !s.anchor.is_empty() {
+        user.push_str(&format!("Anchor line: {}\n", s.anchor));
+    }
+    user.push_str(&format!("Change: {}\n", s.change));
+
+    if s.is_new || input.file_ctx.trim().is_empty() {
+        user.push_str(&format!(
+            "\n`{}` does not exist yet: create it with an edit block whose SEARCH is empty.\n",
+            s.file
+        ));
+    } else {
+        user.push_str(&format!("\n# Current contents of {}\n{}", s.file, input.file_ctx));
+    }
+
+    if let Some(error) = input.retry_error {
+        user.push_str(&format!(
+            "\n# The previous attempt at this step failed\n{error}\n\
+             Some blocks may already be applied. The contents above are CURRENT. \
+             Write only the edit that is still missing, with SEARCH copied exactly from them.\n"
+        ));
+    }
+    user.push_str("\nWrite the edit block for this step now.");
+
+    ChatRequest {
+        model: cfg.executor_model.clone(),
+        messages: vec![ChatMsg::system(system), ChatMsg::user(user)],
+        stream: true,
+        think: cfg.executor_think.then_some(true),
+        format: None,
+        options: Options::new(cfg.num_ctx, Some(0.1)),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -271,7 +412,7 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         EXECUTOR_SYSTEM
     };
     let mut system = String::from(base);
-    append_instructions(&mut system, &pending.instructions); // <- new
+    append_instructions(&mut system, &pending.instructions);
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
     if !pending.project.trim().is_empty() {
@@ -292,9 +433,8 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         messages,
         stream: true,
         think: cfg.executor_think.then_some(true),
-        options: Options {
-            num_ctx: cfg.num_ctx,
-        },
+        format: None,
+        options: Options::new(cfg.num_ctx, (pending.intent == Intent::Change).then_some(0.1)),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -328,9 +468,8 @@ pub fn line_edit_request(
         messages: vec![ChatMsg::system(LINE_EDIT_SYSTEM), ChatMsg::user(user)],
         stream: false,
         think: cfg.executor_think.then_some(true),
-        options: Options {
-            num_ctx: cfg.num_ctx,
-        },
+        format: None,
+        options: Options::new(cfg.num_ctx, Some(0.1)),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -450,9 +589,8 @@ pub fn scout_request(cfg: &Config, pending: &Pending) -> ChatRequest {
         messages: vec![ChatMsg::system(SCOUT_SYSTEM), ChatMsg::user(user)],
         stream: false,
         think: Some(false), // a path list needs no long reasoning
-        options: Options {
-            num_ctx: cfg.num_ctx,
-        },
+        format: None,
+        options: Options::new(cfg.num_ctx, Some(0.0)),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -475,3 +613,132 @@ pub fn parse_scout(reply: &str) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .collect()
 }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+//     use crate::plan;
+
+//     fn cfg() -> Config {
+//         Config {
+//             planner_model: "planner".into(),
+//             executor_model: "executor".into(),
+//             num_ctx: 8192,
+//             keep_alive: "10m".into(),
+//             planner_think: true,
+//             executor_think: false,
+//         }
+//     }
+
+//     fn pending(intent: Intent) -> Pending {
+//         Pending {
+//             task: "add a clear button".into(),
+//             memory: String::new(),
+//             history: Vec::new(),
+//             project: "Folder: demo".into(),
+//             intent,
+//             instructions: String::new(),
+//         }
+//     }
+
+//     #[test]
+//     fn change_plans_use_the_schema_answers_do_not() {
+//         let change = planner_request(&cfg(), &pending(Intent::Change));
+//         assert!(change.format.is_some());
+//         assert!(change.messages[0].content.contains("OUTPUT FORMAT"));
+//         let answer = planner_request(&cfg(), &pending(Intent::Answer));
+//         assert!(answer.format.is_none());
+//         assert!(!answer.messages[0].content.contains("OUTPUT FORMAT"));
+//     }
+
+//     #[test]
+//     fn request_json_skips_empty_optional_fields() {
+//         let answer = serde_json::to_value(planner_request(&cfg(), &pending(Intent::Answer))).unwrap();
+//         assert!(answer.get("format").is_none());
+//         assert!(answer["options"].get("temperature").is_none());
+//         let repair = serde_json::to_value(repair_request(&cfg(), "t", "ctx", "{}", &["bad".into()])).unwrap();
+//         assert!(repair["format"]["properties"]["steps"].is_object());
+//         assert_eq!(repair["options"]["temperature"], 0.0);
+//         assert_eq!(repair["stream"], false);
+//     }
+
+//     #[test]
+//     fn repair_prompt_lists_the_problems_and_the_context() {
+//         let r = repair_request(&cfg(), "task", "FILE TEXT", "{old}", &["Step 1: bad path".into()]);
+//         let user = &r.messages[1].content;
+//         assert!(user.contains("- Step 1: bad path"));
+//         assert!(user.contains("FILE TEXT"));
+//         assert!(user.contains("{old}"));
+//     }
+
+//     fn sample_step() -> Step {
+//         Step {
+//             id: 2,
+//             file: "src/ui.rs".into(),
+//             is_new: false,
+//             target: "fn view".into(),
+//             anchor: "pub fn view(app: &App)".into(),
+//             change: "add the button".into(),
+//             depends_on: vec![1],
+//             verify: None,
+//         }
+//     }
+
+//     #[test]
+//     fn step_prompt_is_scoped_to_one_step() {
+//         let step = sample_step();
+//         let done = vec!["1. src/msg.rs: add Clear variant".to_string()];
+//         let input = StepInput {
+//             project_name: "demo",
+//             instructions: "",
+//             task: "add a clear button",
+//             goal: "Clear button",
+//             step: &step,
+//             total: 3,
+//             done: &done,
+//             file_ctx: "### src/ui.rs\n```rust\nfn view() {}\n```\n\n",
+//             retry_error: None,
+//         };
+//         let r = step_request(&cfg(), &input);
+//         assert_eq!(r.model, "executor");
+//         assert!(r.stream && r.format.is_none());
+//         assert_eq!(r.messages.len(), 2); // system + user, no history
+//         assert!(r.messages[0].content.contains("ONE plan step"));
+//         let user = &r.messages[1].content;
+//         assert!(user.contains("# Current step 2/3"));
+//         assert!(user.contains("- 1. src/msg.rs: add Clear variant"));
+//         assert!(user.contains("Anchor line: pub fn view(app: &App)"));
+//         assert!(user.contains("# Current contents of src/ui.rs"));
+//         assert!(!user.contains("previous attempt"));
+//     }
+
+//     #[test]
+//     fn step_prompt_handles_new_files_and_retries() {
+//         let mut step = sample_step();
+//         step.is_new = true;
+//         let input = StepInput {
+//             project_name: "demo",
+//             instructions: "Use tabs.",
+//             task: "t",
+//             goal: "",
+//             step: &step,
+//             total: 1,
+//             done: &[],
+//             file_ctx: "",
+//             retry_error: Some("SEARCH text not found"),
+//         };
+//         let r = step_request(&cfg(), &input);
+//         assert!(r.messages[0].content.contains("Use tabs."));
+//         let user = &r.messages[1].content;
+//         assert!(user.contains("(nothing yet)"));
+//         assert!(user.contains("SEARCH is empty"));
+//         assert!(user.contains("SEARCH text not found"));
+//     }
+
+//     #[test]
+//     fn a_plan_parsed_from_the_planner_reply_survives_the_round_trip() {
+//         let reply = r#"{"goal":"g","steps":[{"id":1,"file":"a.rs","is_new":true,"target":"","anchor":"","change":"make it"}]}"#;
+//         let plan = plan::parse(reply).unwrap();
+//         assert_eq!(plan.steps[0].file, "a.rs");
+//     }
+// }

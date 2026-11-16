@@ -177,6 +177,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if app.reviewing {
         lower = lower.push(plan_review(app));
     }
+    if let Some(panel) = super::plan_panel::view(app) {
+        lower = lower.push(panel);
+    }
     if let Some(bar) = proposal_bar(app) {
         lower = lower.push(bar);
     }

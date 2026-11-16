@@ -1,4 +1,5 @@
 pub mod pipeline;
+pub mod plan;
 
 use serde::{Deserialize, Serialize};
 

@@ -3,7 +3,7 @@ use std::pin::Pin;
 
 use futures::{Stream, StreamExt};
 use reqwest::RequestBuilder;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::types::{ChatChunk, ChatRequest, Endpoint, Provider, StreamEvent, TagsResponse};
 
@@ -122,7 +122,10 @@ async fn ensure_ok(ep: &Endpoint, resp: reqwest::Response) -> Result<reqwest::Re
             e => e.get("message").and_then(|m| m.as_str()).map(String::from),
         })
         .unwrap_or(body);
-    Err(format!("{} returned {status}: {message}", ep.provider.label()))
+    Err(format!(
+        "{} returned {status}: {message}",
+        ep.provider.label()
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -131,8 +134,18 @@ async fn ensure_ok(ep: &Endpoint, resp: reqwest::Response) -> Result<reqwest::Re
 
 fn is_chat_model(p: Provider, id: &str) -> bool {
     const SKIP: &[&str] = &[
-        "embedding", "moderation", "tts", "whisper", "transcribe", "realtime", "audio", "image",
-        "dall-e", "davinci", "babbage", "search",
+        "embedding",
+        "moderation",
+        "tts",
+        "whisper",
+        "transcribe",
+        "realtime",
+        "audio",
+        "image",
+        "dall-e",
+        "davinci",
+        "babbage",
+        "search",
     ];
     if SKIP.iter().any(|s| id.contains(s)) {
         return false;
@@ -215,7 +228,12 @@ fn chat_body(ep: &Endpoint, req: &ChatRequest, stream: bool) -> Value {
                 .iter()
                 .map(|m| json!({ "role": m.role, "content": m.content }))
                 .collect();
-            json!({ "model": name, "messages": messages, "stream": stream })
+            let mut body = json!({ "model": name, "messages": messages, "stream": stream });
+            // A schema becomes "reply with a JSON object" (the prompt already says JSON).
+            if req.format.is_some() {
+                body["response_format"] = json!({ "type": "json_object" });
+            }
+            body
         }
         Provider::Anthropic => {
             // Claude takes the system prompt separately and wants the chat to start with a user turn.
@@ -241,6 +259,9 @@ fn chat_body(ep: &Endpoint, req: &ChatRequest, stream: bool) -> Value {
             });
             if !system.is_empty() {
                 body["system"] = json!(system);
+            }
+            if let Some(t) = req.options.temperature {
+                body["temperature"] = json!(t);
             }
             body
         }
@@ -304,7 +325,11 @@ pub async fn warm_up(
 
 enum StreamState {
     Init(Box<(Endpoint, ChatRequest)>),
-    Running { provider: Provider, bytes: ByteStream, buf: Vec<u8> },
+    Running {
+        provider: Provider,
+        bytes: ByteStream,
+        buf: Vec<u8>,
+    },
     Finished,
 }
 
@@ -450,22 +475,37 @@ async fn next_event(mut state: StreamState) -> Option<(StreamEvent, StreamState)
                     Err(e) => return Some((StreamEvent::Error(e), StreamState::Finished)),
                 }
             }
-            StreamState::Running { provider, mut bytes, mut buf } => {
+            StreamState::Running {
+                provider,
+                mut bytes,
+                mut buf,
+            } => {
                 // Emit any complete line already buffered.
                 if let Some(pos) = buf.iter().position(|b| *b == b'\n') {
                     let line: Vec<u8> = buf.drain(..=pos).collect();
                     match parse_line(provider, &line) {
                         Some(StreamEvent::Done) => {
-                            return Some((StreamEvent::Done, StreamState::Finished))
+                            return Some((StreamEvent::Done, StreamState::Finished));
                         }
                         Some(StreamEvent::Error(e)) => {
-                            return Some((StreamEvent::Error(e), StreamState::Finished))
+                            return Some((StreamEvent::Error(e), StreamState::Finished));
                         }
                         Some(event) => {
-                            return Some((event, StreamState::Running { provider, bytes, buf }))
+                            return Some((
+                                event,
+                                StreamState::Running {
+                                    provider,
+                                    bytes,
+                                    buf,
+                                },
+                            ));
                         }
                         None => {
-                            state = StreamState::Running { provider, bytes, buf };
+                            state = StreamState::Running {
+                                provider,
+                                bytes,
+                                buf,
+                            };
                             continue;
                         }
                     }
@@ -475,10 +515,14 @@ async fn next_event(mut state: StreamState) -> Option<(StreamEvent, StreamState)
                 match bytes.next().await {
                     Some(Ok(chunk)) => {
                         buf.extend_from_slice(&chunk);
-                        state = StreamState::Running { provider, bytes, buf };
+                        state = StreamState::Running {
+                            provider,
+                            bytes,
+                            buf,
+                        };
                     }
                     Some(Err(e)) => {
-                        return Some((StreamEvent::Error(describe(&e)), StreamState::Finished))
+                        return Some((StreamEvent::Error(describe(&e)), StreamState::Finished));
                     }
                     None => return Some((StreamEvent::Done, StreamState::Finished)),
                 }

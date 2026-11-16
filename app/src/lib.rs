@@ -9,6 +9,7 @@ use terminal::{self, RunResult};
 use workspace::{self, Action, ChangeSet};
 
 use agent::pipeline::{self, Intent, Pending, Proposal};
+use agent::plan::PlanRun;
 use agent::{ChatMessage, Role};
 use chats::{self, Chat, ChatSummary};
 use code::CodeDoc;
@@ -21,6 +22,8 @@ use project::Project;
 use workspaces::{self, Workspace};
 
 const MAX_AGENT_STEPS: u8 = 3;
+
+mod steps;
 
 #[derive(Debug, Clone)]
 pub enum ActionStatus {
@@ -94,6 +97,12 @@ pub enum Message {
     DiscardPlan,
     /// Open this file and stage the proposed edits for it.
     ReviewChange(String),
+    /// Result of asking the planner to fix a plan the checker rejected.
+    PlanRepaired(Result<String, String>),
+    /// Plan panel buttons.
+    RetryStep,
+    SkipStep,
+    ClosePlanRun,
 
     // Project panel
     TogglePanel,
@@ -228,6 +237,8 @@ pub struct App {
     pub plan_editor: text_editor::Content,
     /// Edit blocks returned by the executor, waiting to be staged per file.
     pub proposals: Vec<Proposal>,
+    /// The structured plan being reviewed or executed step by step.
+    pub plan_run: Option<PlanRun>,
 
     /// Animation frame counter for the "Thinking..." dots.
     pub tick: u32,
@@ -343,6 +354,7 @@ impl App {
             reviewing: false,
             plan_editor: text_editor::Content::new(),
             proposals: Vec::new(),
+            plan_run: None,
             tick: 0,
             think_started: None,
             inline_think: false,
@@ -458,6 +470,7 @@ impl App {
                     self.messages.clear();
                     self.current_chat = None;
                     self.chat_project = None;
+                    self.plan_run = None;
                     self.status = "New chat".into();
                     self.action_status.clear();
                 }
@@ -500,6 +513,7 @@ impl App {
             Message::DiscardPlan => {
                 self.reviewing = false;
                 self.pending = None;
+                self.plan_run = None;
                 if self.messages.last().is_some_and(|m| m.role == Role::Plan) {
                     self.messages.pop();
                 }
@@ -510,6 +524,9 @@ impl App {
             Message::RunPlan => {
                 if !self.reviewing {
                     return Task::none();
+                }
+                if self.plan_run.is_some() {
+                    return self.run_structured_plan();
                 }
                 let edited = self.plan_editor.text().trim().to_string();
                 self.reviewing = false;
@@ -533,6 +550,13 @@ impl App {
                 self.start_executor(plan)
             }
             Message::ReviewChange(file) => self.review_change(file),
+            Message::PlanRepaired(result) => self.on_plan_repaired(result),
+            Message::RetryStep => self.retry_step(),
+            Message::SkipStep => self.skip_step(),
+            Message::ClosePlanRun => {
+                self.plan_run = None;
+                Task::none()
+            }
 
             // ---- project panel ----
             Message::TogglePanel => {
@@ -1065,6 +1089,7 @@ impl App {
             pipeline::classify(&text, self.project.is_some())
         };
         self.proposals.clear();
+        self.plan_run = None;
         self.reviewing = false;
 
         // Gather context BEFORE adding the new message to the history.
@@ -1247,7 +1272,8 @@ impl App {
                         )
                     };
                     self.save_chat();
-                    return scroll_to_end();
+                    // return scroll_to_end();
+                    return self.finish_planning(plan, false);
                 }
 
                 if plan.is_empty() {
@@ -1264,6 +1290,10 @@ impl App {
                 self.start_executor(Some(plan))
             }
             Phase::Executing => {
+                // A plan step finished: apply it, then run the next one.
+                if self.plan_run.as_ref().is_some_and(|r| r.cur.is_some()) {
+                    return self.on_step_done();
+                }
                 self.phase = Phase::Idle;
                 let idx = self.messages.len().saturating_sub(1);
                 let mut next = Task::none();
@@ -1338,6 +1368,7 @@ impl App {
             handle.abort();
         }
         self.finish_thinking();
+        self.interrupt_plan_run("Stopped");
         self.phase = Phase::Idle;
         self.reviewing = false;
         self.pending = None;
@@ -1360,6 +1391,7 @@ impl App {
         }
 
         self.think_started = None;
+        self.interrupt_plan_run(&error);
         self.messages
             .push(ChatMessage::new(Role::Error, error.clone()));
         self.phase = Phase::Idle;
@@ -1685,6 +1717,7 @@ impl App {
                 self.current_chat = Some(chat.id);
                 self.action_status.clear();
                 self.pending = None;
+                self.plan_run = None;
                 self.screen = Screen::Chat;
                 if let Some(slug) = self.chat_project.clone() {
                     self.sync_folder(&slug);

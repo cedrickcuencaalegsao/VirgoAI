@@ -32,6 +32,7 @@ dependencies = [
  "config",
  "ollama",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

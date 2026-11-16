@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMsg {
@@ -32,6 +33,18 @@ impl ChatMsg {
 #[derive(Debug, Clone, Serialize)]
 pub struct Options {
     pub num_ctx: u32,
+    /// `None` keeps the model's own default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+}
+
+impl Options {
+    pub fn new(num_ctx: u32, temperature: Option<f32>) -> Self {
+        Self {
+            num_ctx,
+            temperature,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,6 +54,10 @@ pub struct ChatRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub think: Option<bool>,
+    /// A JSON schema the reply must follow (Ollama structured output).
+    /// Other providers only use it as "reply with JSON".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub format: Option<Value>,
     pub options: Options,
     pub keep_alive: String,
 }
@@ -113,7 +130,8 @@ impl Provider {
     }
     pub fn default_url(self) -> &'static str {
         match self {
-            Provider::Ollama => "http://localhost::11434",
+            // Was "http://localhost::11434" (double colon).
+            Provider::Ollama => "http://localhost:11434",
             Provider::OpenAi => "https://api.openai.com/v1",
             Provider::Anthropic => "https://api.anthropic.com/v1",
             Provider::Xai => "https://api.x.ai/v1",

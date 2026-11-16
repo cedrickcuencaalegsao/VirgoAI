@@ -6,6 +6,7 @@ pub mod markdown;
 pub mod memory;
 pub mod nav;
 pub mod palette;
+pub mod plan_panel;
 pub mod project_panel;
 pub mod rail;
 pub mod settings;

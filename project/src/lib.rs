@@ -373,6 +373,53 @@ impl Project {
             skipped,
         }
     }
+
+    /// Every definition of one file with its line number.
+    pub fn outline(&self, rel: &str, max_chars: usize) -> String {
+        let Ok(text) = self.read(rel) else {
+            return String::new();
+        };
+        let mut out = String::new();
+        for (i, line) in text.lines().enumerate() {
+            if !is_signature(line) {
+                continue;
+            }
+            let sig: String = line.trim().chars().take(100).collect();
+            let row = format!("{:>5}: {sig}\n", i + 1);
+            if out.len() + row.len() > max_chars {
+                out.push_str("   ...\n");
+                break;
+            }
+            out.push_str(&row);
+        }
+        out
+    }
+
+    /// ±`radius` lines around the first line that contains one of `needles`.
+    pub fn window(&self, rel: &str, needles: &[&str], radius: usize) -> Option<String> {
+        let text = self.read(rel).ok()?;
+        let lines: Vec<&str> = text.lines().collect();
+        let at = needles
+            .iter()
+            .map(|n| n.trim())
+            .filter(|n| !n.is_empty())
+            .find_map(|n| lines.iter().position(|l| l.contains(n)))?;
+        let start = at.saturating_sub(radius);
+        let end = (at + radius + 1).min(lines.len());
+        let mut out = format!(
+            "### {rel} (lines {}-{} of {})\n```{}\n",
+            start + 1,
+            end,
+            lines.len(),
+            lang_for(rel)
+        );
+        for l in &lines[start..end] {
+            out.push_str(l);
+            out.push('\n');
+        }
+        out.push_str("```\n\n");
+        Some(out)
+    }
 }
 
 /// Skip hidden items and well-known build/dependency folders.

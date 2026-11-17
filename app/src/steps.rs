@@ -49,11 +49,9 @@ impl App {
         let Some(project) = self.project.as_ref() else {
             return Vec::new();
         };
-        plan::validate(
-            parsed,
-            &|rel| project.read(rel).ok(),
-            &|rel| project.is_file(rel),
-        )
+        plan::validate(parsed, &|rel| project.read(rel).ok(), &|rel| {
+            project.is_file(rel)
+        })
     }
 
     /// Ask the planner once to fix the problems the checker found.
@@ -194,7 +192,12 @@ impl App {
         self.reviewing = false;
         self.pending = None;
         self.agent_steps = 0;
-        if let Some(m) = self.messages.iter_mut().rev().find(|m| m.role == Role::Plan) {
+        if let Some(m) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == Role::Plan)
+        {
             m.content = plan::render_markdown(&run.plan);
         }
         self.plan_run = Some(run);
@@ -225,9 +228,25 @@ impl App {
             return self.fail("No project is open".into());
         };
         let budget = self.cfg.num_ctx as usize * 2;
-        let file_ctx = project
-            .build_context(std::slice::from_ref(&step.file), budget)
-            .text;
+        let too_big = project
+            .read(&step.file)
+            .map_or(false, |t| t.chars().count() > budget);
+        let file_ctx = if too_big {
+            let mut needles: Vec<&str> = vec![step.anchor.as_str()];
+            needles.extend(step.symbols.iter().map(String::as_str));
+            needles.push(step.target.as_str());
+            project
+                .window(&step.file, &needles, 120)
+                .unwrap_or_else(|| {
+                    project
+                        .build_context(std::slice::from_ref(&step.file), budget)
+                        .text
+                })
+        } else {
+            project
+                .build_context(std::slice::from_ref(&step.file), budget)
+                .text
+        };
         let project_name = project.name.clone();
 
         let request = pipeline::step_request(

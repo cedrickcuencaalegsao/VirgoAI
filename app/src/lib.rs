@@ -1969,7 +1969,7 @@ impl App {
             }
         }
 
-        let map = project.repo_map(self.cfg.num_ctx as usize);
+        let map = project.repo_map(self.cfg.planner_num_ctx as usize);
         let text = format!(
             "Folder: {}\n\nProject map (every file with its main definitions):\n{}",
             project.name, map
@@ -2005,7 +2005,7 @@ impl App {
         }
 
         let scout_failed = result.is_err();
-        let budget = self.cfg.num_ctx as usize * 7 / 5;
+        let budget = file_budget(self.cfg.planner_num_ctx, 60);
         let mut note = String::new();
 
         if let (Some(project), Some(pending)) = (self.project.as_ref(), self.pending.as_mut()) {
@@ -2034,9 +2034,21 @@ impl App {
             files.truncate(10);
 
             let ctx = project.build_context(&files, budget);
+            let mut outlines = String::new();
+            for rel in &files {
+                if project
+                    .read(rel)
+                    .map_or(false, |t| t.chars().count() > budget / 3)
+                {
+                    outlines.push_str(&format!(
+                        "### Outline of {rel} (line: definition)\n{}\n",
+                        project.outline(rel, 6000)
+                    ));
+                }
+            }
             let map = std::mem::take(&mut pending.project);
             pending.project = format!(
-                "{map}\n## File contents (selected by the scout)\n\n{}",
+                "{map}\n## File contents (selected by the scout)\n\n{}\n{outlines}",
                 ctx.text
             );
             note = format!("{} file(s) read", ctx.included.len());
@@ -2700,4 +2712,9 @@ fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
         (Ok(x), Ok(y)) => x == y,
         _ => a == b,
     }
+}
+
+/// Characters of file text that fit in `pct`% of a `ctx`-token window.
+fn file_budget(ctx: u32, pct: usize) -> usize {
+    ctx as usize * 3 * pct / 100
 }

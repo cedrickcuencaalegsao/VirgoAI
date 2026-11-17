@@ -42,19 +42,21 @@ pub enum Intent {
 /// The format rules here override the "numbered plan" wording of `PLANNER_SYSTEM`.
 const PLANNER_CHANGE_SUFFIX: &str = r#"
 
-The user wants the code changed. You are given a project map (every file with its main definitions) and the full contents of the files most relevant to the request. Plan against the real code: reuse existing functions and types by name and follow the project's conventions.
+The user wants the code changed. You are given a project map, the full contents of some files, and for large files an OUTLINE (line: definition). Plan against the real code, reuse existing names, follow the project's conventions.
 
-OUTPUT FORMAT (this overrides the format above). Reply with ONLY one JSON object, no prose and no code fence:
-{"goal": "one sentence", "steps": [{"id": 1, "file": "exact/relative/path.rs", "is_new": false, "target": "existing fn or struct this change touches or sits next to", "anchor": "one existing line of the file near the change, copied verbatim", "change": "what changes, one or two sentences", "depends_on": [], "verify": ""}], "need_to_check": []}
+OUTPUT FORMAT (overrides the format above). Reply with ONLY one JSON object, no prose, no code fence:
+{"goal": "one sentence", "steps": [{"id": 1, "file": "exact/path.rs", "is_new": false, "target": "existing fn or struct name", "anchor": "one real code line copied verbatim", "symbols": ["App", "Message"], "details": ["Cut the fields `input` and `messages` out of `struct App`", "Add `pub struct ChatState { pub input: String, pub messages: Vec<ChatMessage> }` with `#[derive(Default)]`"], "change": "one-sentence summary", "depends_on": [], "verify": "cargo check"}], "need_to_check": []}
 
 Rules:
-- One step = ONE file = ONE logical change. At most 7 steps, in dependency order.
+- `details`: 2-8 imperative instructions. Each names identifiers that appear in the code shown and gives the signature of anything new. Never write "organize", "improve" or "refactor" without saying exactly what moves where.
+- `anchor` is a line of code, never a heading or number. `target` is a symbol, never a path.
+- One step = ONE file = ONE edit block, at most about 60 changed lines.
+- If the request needs more than 7 steps, plan ONLY phase 1 and start `goal` with "Phase 1 of N:".
+- Every step must leave the project compiling. For moves: step 1 creates the new file (is_new), step 2 adds `mod x;` and switches callers, step 3 removes the old code.
+- Put `cargo check` in `verify` on every step that changes Rust code.
+- `need_to_check` holds file paths only.
 - Use exact paths from the project map. Never invent files or functions.
-- The anchor must be a line that really exists in the file contents shown above. Copy it exactly.
-- For a file that does not exist yet set is_new to true and leave target and anchor empty.
-- depends_on lists the ids of earlier steps this step needs.
-- Put a shell command such as `cargo check` in verify on the LAST step only, otherwise leave it empty.
-- If you need a file that was not shown, list its path in need_to_check instead of guessing."#;
+"#;
 
 const SCOUT_SYSTEM: &str = "You are the scouting stage of a coding assistant. You get a map of a \
 project (files with their main definitions) and a request. Reply with ONLY the relative paths of \
@@ -347,7 +349,10 @@ pub fn step_request(cfg: &Config, input: &StepInput) -> ChatRequest {
     system.push_str(STEP_RULES);
 
     let s = input.step;
-    let mut user = format!("Folder: {}\n\n# Request\n{}\n", input.project_name, input.task);
+    let mut user = format!(
+        "Folder: {}\n\n# Request\n{}\n",
+        input.project_name, input.task
+    );
     if !input.goal.is_empty() {
         user.push_str(&format!("\n# Plan goal\n{}\n", input.goal));
     }
@@ -366,7 +371,11 @@ pub fn step_request(cfg: &Config, input: &StepInput) -> ChatRequest {
         s.id,
         input.total,
         s.file,
-        if s.is_new { "new file" } else { "existing file" }
+        if s.is_new {
+            "new file"
+        } else {
+            "existing file"
+        }
     ));
     if !s.target.is_empty() {
         user.push_str(&format!("Target: {}\n", s.target));
@@ -376,13 +385,26 @@ pub fn step_request(cfg: &Config, input: &StepInput) -> ChatRequest {
     }
     user.push_str(&format!("Change: {}\n", s.change));
 
+    if !s.symbols.is_empty() {
+        user.push_str(&format!("Symbols: {}\n", s.symbols.join(", ")));
+    }
+    if !s.details.is_empty() {
+        user.push_str("Instructions:\n");
+        for (i, d) in s.details.iter().enumerate() {
+            user.push_str(&format!("{}. {d}\n", i + 1));
+        }
+    }
+
     if s.is_new || input.file_ctx.trim().is_empty() {
         user.push_str(&format!(
             "\n`{}` does not exist yet: create it with an edit block whose SEARCH is empty.\n",
             s.file
         ));
     } else {
-        user.push_str(&format!("\n# Current contents of {}\n{}", s.file, input.file_ctx));
+        user.push_str(&format!(
+            "\n# Current contents of {}\n{}",
+            s.file, input.file_ctx
+        ));
     }
 
     if let Some(error) = input.retry_error {
@@ -434,7 +456,10 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         stream: true,
         think: cfg.executor_think.then_some(true),
         format: None,
-        options: Options::new(cfg.num_ctx, (pending.intent == Intent::Change).then_some(0.1)),
+        options: Options::new(
+            cfg.num_ctx,
+            (pending.intent == Intent::Change).then_some(0.1),
+        ),
         keep_alive: cfg.keep_alive.clone(),
     }
 }

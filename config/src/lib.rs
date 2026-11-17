@@ -13,6 +13,9 @@ pub struct Config {
     /// Empty means "use the default folder inside the app data dir".
     pub memory_dir: String,
     pub num_ctx: u32,
+    /// Context window for the planner and scout calls. Larger than `num_ctx`
+    /// because the planner reads the project map and whole files.
+    pub planner_num_ctx: u32,
     pub keep_alive: String,
     pub use_planner: bool,
     pub planner_think: bool,
@@ -45,6 +48,7 @@ impl Default for Config {
             executor_model: "qwen2.5-coder:7b".into(),
             memory_dir: String::new(),
             num_ctx: 8192,
+            planner_num_ctx: 16384,
             keep_alive: "10m".into(),
             use_planner: true,
             planner_think: true,
@@ -153,8 +157,16 @@ impl Config {
             Provider::Anthropic => &self.anthropic_url,
             Provider::Xai => &self.xai_url,
         };
-        let url = if url.trim().is_empty() { p.default_url() } else { url.as_str() };
-        Endpoint { provider: p, base_url: url.to_string(), api_key: self.api_key(p) }
+        let url = if url.trim().is_empty() {
+            p.default_url()
+        } else {
+            url.as_str()
+        };
+        Endpoint {
+            provider: p,
+            base_url: url.to_string(),
+            api_key: self.api_key(p),
+        }
     }
 
     /// The endpoint that serves a model name such as `openai:gpt-4o` or `qwen3:8b`.
@@ -164,10 +176,19 @@ impl Config {
 
     /// Ollama plus every provider that has a key.
     pub fn endpoints(&self) -> Vec<Endpoint> {
-        [Provider::Ollama, Provider::OpenAi, Provider::Anthropic, Provider::Xai]
-            .into_iter()
-            .map(|p| self.endpoint(p))
-            .filter(|e| e.provider == Provider::Ollama || !e.api_key.is_empty())
-            .collect()
+        [
+            Provider::Ollama,
+            Provider::OpenAi,
+            Provider::Anthropic,
+            Provider::Xai,
+        ]
+        .into_iter()
+        .map(|p| self.endpoint(p))
+        .filter(|e| e.provider == Provider::Ollama || !e.api_key.is_empty())
+        .collect()
     }
+}
+
+pub fn file_budget(ctx: u32, pct: usize) -> usize {
+    ctx as usize * 3 * pct / 100
 }

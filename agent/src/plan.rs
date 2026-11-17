@@ -60,6 +60,12 @@ pub struct Step {
     /// A shell command that checks the result, e.g. `cargo check`.
     #[serde(default)]
     pub verify: Option<String>,
+    /// Exact names of functions, structs, fields or variants this step touches.
+    #[serde(default, deserialize_with = "null_default")]
+    pub symbols: Vec<String>,
+    /// Ordered, concrete instructions for the executor.
+    #[serde(default, deserialize_with = "null_default")]
+    pub details: Vec<String>,
 }
 
 /// JSON schema for Ollama's `format` field.
@@ -80,7 +86,9 @@ pub fn schema() -> Value {
                         "anchor": { "type": "string" },
                         "change": { "type": "string" },
                         "depends_on": { "type": "array", "items": { "type": "integer" } },
-                        "verify": { "type": "string" }
+                        "verify": { "type": "string" },
+                        "symbols": { "type": "array", "items": { "type": "string" } },
+                        "details": { "type": "array", "items": { "type": "string" } },
                     },
                     "required": ["id", "file", "is_new", "target", "anchor", "change"]
                 }
@@ -143,6 +151,13 @@ fn normalize(plan: &mut Plan) {
             .unwrap_or("")
             .to_string();
         s.change = s.change.trim().to_string();
+        s.symbols.retain(|x| !x.trim().is_empty());
+        s.details = s
+            .details
+            .iter()
+            .map(|d| d.trim().to_string())
+            .filter(|d| !d.is_empty())
+            .collect();
         s.verify = s
             .verify
             .take()
@@ -197,11 +212,26 @@ pub fn validate(
     for s in &plan.steps {
         let n = s.id;
         if s.file.is_empty() || s.file.starts_with('/') || s.file.split('/').any(|p| p == "..") {
-            errors.push(format!("Step {n}: `{}` is not a safe relative path.", s.file));
+            errors.push(format!(
+                "Step {n}: `{}` is not a safe relative path.",
+                s.file
+            ));
             continue;
         }
         if s.change.is_empty() {
             errors.push(format!("Step {n}: `change` is empty."));
+        }
+
+        if s.details.len() < 2 || s.details.iter().all(|d| d.split_whitespace().count() < 6) {
+            errors.push(format!(
+                "Step {n}: `details` is too vague. Give 2-8 concrete instructions naming exact \
+         functions, structs, fields or variants and the signature of anything new."
+            ));
+        }
+        if s.target == s.file {
+            errors.push(format!(
+                "Step {n}: `target` must be a symbol name, not the file path."
+            ));
         }
 
         if s.is_new {
@@ -226,6 +256,15 @@ pub fn validate(
             errors.push(format!("Step {n}: `{}` cannot be read as text.", s.file));
             continue;
         };
+
+        for sym in &s.symbols {
+            if !text.contains(sym.as_str()) {
+                errors.push(format!(
+                    "Step {n}: symbol `{sym}` does not exist in `{}`.",
+                    s.file
+                ));
+            }
+        }
 
         if s.anchor.is_empty() && s.target.is_empty() {
             errors.push(format!(
@@ -252,9 +291,9 @@ pub fn validate(
 /// Heuristic: the longest identifier-like word of `target` must occur in the file.
 fn mentions_target(text: &str, target: &str) -> bool {
     const NOISE: &[&str] = &[
-        "fn", "pub", "struct", "enum", "impl", "trait", "mod", "async", "def", "class",
-        "function", "const", "static", "let", "type", "method", "the", "in", "of", "new", "add",
-        "an", "to", "for", "and", "or", "with", "field", "variant", "import", "use",
+        "fn", "pub", "struct", "enum", "impl", "trait", "mod", "async", "def", "class", "function",
+        "const", "static", "let", "type", "method", "the", "in", "of", "new", "add", "an", "to",
+        "for", "and", "or", "with", "field", "variant", "import", "use",
     ];
     let longest = target
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -474,7 +513,8 @@ Here is the plan:
   "steps": [
     {"id": 10, "file": "./src/ui.rs", "is_new": false, "target": "fn view", "anchor": "pub fn view(app: &App)", "change": "add the button", "depends_on": [], "verify": ""},
     {"id": 20, "file": "src/msg.rs", "is_new": false, "target": null, "anchor": "pub enum Message {", "change": "add Clear variant", "depends_on": [10, 99, 20], "verify": "cargo check"}
-  ]
+  ],
+  "details": ["Add a Clear button next to the send button", "Emit Message::Clear on press"], "symbols": []
 }
 ```"#;
 
@@ -487,11 +527,9 @@ Here is the plan:
 
     fn check(plan: &Plan) -> Vec<String> {
         let f = files();
-        validate(
-            plan,
-            &|p| f.get(p).map(|s| s.to_string()),
-            &|p| f.contains_key(p),
-        )
+        validate(plan, &|p| f.get(p).map(|s| s.to_string()), &|p| {
+            f.contains_key(p)
+        })
     }
 
     #[test]

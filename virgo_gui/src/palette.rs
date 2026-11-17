@@ -45,6 +45,18 @@ fn commands(app: &App) -> Vec<(String, Message)> {
             "Revert last AI edit".into(),
             Message::PaletteRun(Command::RevertLast),
         ),
+        (
+            "Accept all pending changes".into(),
+            Message::PaletteRun(Command::AcceptAll),
+        ),
+        (
+            "Reject all pending changes".into(),
+            Message::PaletteRun(Command::RejectAll),
+        ),
+        (
+            "Undo last accepted change".into(),
+            Message::PaletteRun(Command::UndoEdit),
+        ),
     ];
     for w in &app.workspaces {
         out.push((

@@ -19,6 +19,9 @@ pub struct Config {
     pub executor_think: bool,
     /// Apply model edits to project files as soon as a reply finishes.
     pub auto_apply: bool,
+    /// Show model edits live in the code panel as they are written, and let the
+    /// user accept or reject each change (nothing is written until accepted).
+    pub live_edit: bool,
     /// Folder reopened at startup (empty = none).
     pub last_project: String,
     /// Project (folder name) that new chats are saved into. Empty = none.
@@ -47,6 +50,7 @@ impl Default for Config {
             planner_think: true,
             executor_think: false,
             auto_apply: true,
+            live_edit: true,
             last_project: String::new(),
             active_workspace: String::new(),
             openai_key: String::new(),

@@ -1,6 +1,9 @@
 //! Actions proposed by the model (file edits, deletes, shell commands), applying
 //! them to disk with verification, and undoing them.
 
+mod live;
+pub use live::{LiveEdit, LiveHunk, live_edits};
+
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -135,7 +138,7 @@ fn parse_hunks(body: &[&str]) -> Vec<Hunk> {
 // Applying
 // ---------------------------------------------------------------------------
 
-fn clean(rel: &str) -> &str {
+pub fn clean(rel: &str) -> &str {
     rel.trim().trim_matches('`').trim_start_matches("./")
 }
 

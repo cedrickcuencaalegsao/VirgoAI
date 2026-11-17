@@ -19,7 +19,7 @@ const ROW_H: f32 = 24.0;
 const OVERSCAN: usize = 12;
 const GUTTER_W: f32 = 40.0;
 const MARKER_W: f32 = 12.0;
-const ACTIONS_W: f32 = 56.0;
+const ACTIONS_W: f32 = 84.0;
 
 pub fn view(app: &App) -> Element<'_, Message> {
     match &app.code {
@@ -63,43 +63,56 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
     .spacing(10)
     .align_y(Vertical::Center);
 
-    // ---- apply toolbar ----
-    let pending = doc.edits.len();
-    let summary: Element<'a, Message> = if pending == 0 {
+    // ---- review toolbar ----
+    let pending = doc.change_count();
+    let ready = doc.ready_groups();
+    let typing = doc.groups.iter().any(|g| g.typing);
+    let summary: Element<'a, Message> = if typing {
+        text(format!("Virgo is writing... {pending} change(s)"))
+            .size(12)
+            .style(style::success)
+            .into()
+    } else if pending == 0 {
         text("Click the bulb on a line to ask the model for a change.")
             .size(12)
             .style(style::dim)
             .into()
     } else {
-        text(format!("{pending} AI change(s) pending"))
-            .size(12)
-            .style(style::success)
-            .into()
+        text(format!(
+            "{pending} change(s) to review: use the check / x on each change"
+        ))
+        .size(12)
+        .style(style::success)
+        .into()
     };
 
     let toolbar = row![
         container(summary).width(Length::Fill),
         button(icon_manager::label(
             icon_manager::undo_2(),
-            "Undo apply",
+            if doc.undo_depth() > 1 {
+                format!("Undo ({})", doc.undo_depth())
+            } else {
+                "Undo".to_string()
+            },
             12,
             icon_manager::muted()
         ))
         .padding([6, 10])
-        .on_press_maybe(doc.previous.is_some().then_some(Message::UndoApply))
+        .on_press_maybe(doc.can_undo().then_some(Message::UndoApply))
         .style(style::ghost_button),
-        button(text("Discard").size(12))
+        button(text("Reject all").size(12))
             .padding([6, 10])
             .on_press_maybe((pending > 0).then_some(Message::DiscardEdits))
             .style(style::ghost_button),
         button(icon_manager::label(
             icon_manager::check(),
-            format!("Apply ({pending})"),
+            format!("Accept all ({ready})"),
             13,
             icon_manager::on_primary()
         ))
         .padding([7, 14])
-        .on_press_maybe((pending > 0).then_some(Message::ApplyEdits))
+        .on_press_maybe((ready > 0).then_some(Message::ApplyEdits))
         .style(style::primary_button),
     ]
     .spacing(6)
@@ -191,17 +204,57 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
             .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
             .style(style::ghost_button)
         ];
-        if kind == RowKind::Removed {
-            buttons = buttons.push(
-                button(icon_manager::tint(
-                    icon_manager::undo_2(),
-                    13.0,
-                    icon_manager::muted(),
-                ))
-                .padding([5, 6])
-                .on_press(Message::RevertLine(r.line))
-                .style(style::ghost_button),
-            );
+        match (kind, r.hunk) {
+            // First row of a change: accept or reject the whole change.
+            (RowKind::Removed, Some(group)) if !r.typing => {
+                buttons = buttons
+                    .push(
+                        button(icon_manager::tint(
+                            icon_manager::check(),
+                            13.0,
+                            icon_manager::accent(),
+                        ))
+                        .padding([5, 6])
+                        .on_press(Message::AcceptHunk(group))
+                        .style(style::ghost_button),
+                    )
+                    .push(
+                        button(icon_manager::tint(
+                            icon_manager::x(),
+                            13.0,
+                            icon_manager::muted(),
+                        ))
+                        .padding([5, 6])
+                        .on_press(Message::RejectHunk(group))
+                        .style(style::ghost_button),
+                    );
+            }
+            // Still being written: it can be rejected but not accepted yet.
+            (RowKind::Removed, Some(group)) => {
+                buttons = buttons.push(
+                    button(icon_manager::tint(
+                        icon_manager::x(),
+                        13.0,
+                        icon_manager::muted(),
+                    ))
+                    .padding([5, 6])
+                    .on_press(Message::RejectHunk(group))
+                    .style(style::ghost_button),
+                );
+            }
+            (RowKind::Removed, None) => {
+                buttons = buttons.push(
+                    button(icon_manager::tint(
+                        icon_manager::undo_2(),
+                        13.0,
+                        icon_manager::muted(),
+                    ))
+                    .padding([5, 6])
+                    .on_press(Message::RevertLine(r.line))
+                    .style(style::ghost_button),
+                );
+            }
+            _ => {}
         }
         container(buttons).width(Length::Fixed(ACTIONS_W)).into()
     } else {

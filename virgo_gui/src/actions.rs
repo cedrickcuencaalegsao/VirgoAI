@@ -48,7 +48,8 @@ pub fn view<'a>(
         }
     }
 
-    if unapplied > 1 && !streaming {
+    let reviewing = app.live_card(msg_idx, 0, 1).is_some();
+    if unapplied > 1 && !streaming && !reviewing {
         list = list.push(
             button(icon_manager::label(
                 icon_manager::check(),
@@ -110,6 +111,27 @@ fn edit_card<'a>(
                     .on_press(Message::RevertChange(*id))
                     .style(style::ghost_button),
                 );
+        }
+        // Live review: the decision happens in the code panel, hunk by hunk.
+        None if app.live_card(msg_idx, i, hunks.len()).is_some() => {
+            let (accepted, rejected, open) =
+                app.live_card(msg_idx, i, hunks.len()).unwrap_or((0, 0, 0));
+            let label = if open == 0 {
+                format!("{accepted} accepted, {rejected} rejected")
+            } else if app.is_working() {
+                "Writing live...".to_string()
+            } else {
+                format!("{open} to review")
+            };
+            header = header.push(text(label).size(12).style(style::success));
+            if open > 0 {
+                header = header.push(
+                    button(text("Open").size(12))
+                        .padding([5, 10])
+                        .on_press(Message::OpenFile(path.to_string()))
+                        .style(style::ghost_button),
+                );
+            }
         }
         _ => {
             header = header.push(

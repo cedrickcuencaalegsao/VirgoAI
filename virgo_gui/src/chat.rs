@@ -180,6 +180,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if let Some(panel) = super::plan_panel::view(app) {
         lower = lower.push(panel);
     }
+    if let Some(bar) = review_bar(app) {
+        lower = lower.push(bar);
+    }
     if let Some(bar) = proposal_bar(app) {
         lower = lower.push(bar);
     }
@@ -247,6 +250,64 @@ fn plan_review(app: &App) -> Element<'_, Message> {
         .width(Length::Fill)
         .style(style::plan_card)
         .into()
+}
+
+/// Files with live changes waiting for a decision: open one, or accept / reject all.
+fn review_bar(app: &App) -> Option<Element<'_, Message>> {
+    let files = app.review_files();
+    if files.is_empty() {
+        return None;
+    }
+    let typing = app.is_typing_edit();
+    let total: usize = files.iter().map(|(_, n)| n).sum();
+
+    let mut bar = row![
+        icon_manager::tint(icon_manager::lightbulb(), 14.0, icon_manager::accent()),
+        text(if typing { "Writing:" } else { "To review:" })
+            .size(12)
+            .style(style::dim),
+    ]
+    .spacing(6)
+    .align_y(Vertical::Center);
+
+    for (file, count) in files.iter().take(4) {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        bar = bar.push(
+            button(text(format!("{} ({count})", short(name, 22))).size(12))
+                .padding([4, 10])
+                .on_press(Message::OpenFile(file.clone()))
+                .style(style::chip),
+        );
+    }
+    if files.len() > 4 {
+        bar = bar.push(
+            text(format!("+{} more", files.len() - 4))
+                .size(12)
+                .style(style::dim),
+        );
+    }
+
+    Some(
+        bar.push(horizontal_space())
+            .push(
+                button(text("Reject all").size(12))
+                    .padding([4, 10])
+                    .on_press(Message::RejectAllFiles)
+                    .style(style::ghost_button),
+            )
+            .push(
+                button(icon_manager::label(
+                    icon_manager::check(),
+                    format!("Accept all ({total})"),
+                    12,
+                    icon_manager::on_primary(),
+                ))
+                .padding([5, 12])
+                .on_press_maybe((!typing).then_some(Message::AcceptAllFiles))
+                .style(style::primary_button),
+            )
+            .into(),
+    )
 }
 
 /// One chip per file the model wants to change. Click to stage it in the code panel.

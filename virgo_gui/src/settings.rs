@@ -103,6 +103,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
             cfg.auto_apply
         )
         .on_toggle(Message::ToggleAutoApply),
+        checkbox(
+            "Show model edits live in the code panel and let me accept or reject each change",
+            cfg.live_edit
+        )
+        .on_toggle(Message::ToggleLiveEdit),
         row![
             button(text("Save settings").size(14))
                 .padding([9, 18])

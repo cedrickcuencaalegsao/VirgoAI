@@ -23,6 +23,7 @@ use workspaces::{self, Workspace};
 
 const MAX_AGENT_STEPS: u8 = 3;
 
+mod live;
 mod steps;
 
 #[derive(Debug, Clone)]
@@ -68,6 +69,9 @@ pub enum Command {
     RefreshModels,
     RevertLast,
     ToggleEditMode,
+    AcceptAll,
+    RejectAll,
+    UndoEdit,
 }
 
 #[derive(Debug, Clone)]
@@ -132,6 +136,13 @@ pub enum Message {
     DiscardEdits,
     ApplyEdits,
     UndoApply,
+    /// Accept / reject one change group of the open file (index into `doc.groups`).
+    AcceptHunk(usize),
+    RejectHunk(usize),
+    /// Accept / reject every pending change in every file.
+    AcceptAllFiles,
+    RejectAllFiles,
+    ToggleLiveEdit(bool),
     PlannerSelected(String),
     ExecutorSelected(String),
     RefreshModels,
@@ -305,6 +316,18 @@ pub struct App {
     pub agent_steps: u8,
     pub streamed_actions: usize,
 
+    // Live review of model edits (see live.rs)
+    /// The assistant message whose edits are being reviewed live.
+    pub live_msg: Option<usize>,
+    /// Hunks that are staged, accepted or rejected: they are not staged again.
+    live_done: HashSet<(usize, usize)>,
+    pub live_accepted: HashSet<(usize, usize)>,
+    pub live_rejected: HashSet<(usize, usize)>,
+    /// Edit blocks that created a new file (written directly, not reviewed).
+    live_new_files: HashSet<usize>,
+    /// Files with pending changes that are not open right now.
+    parked: HashMap<String, CodeDoc>,
+
     pub memory_graph: Graph,
     pub memory_query: String,
     pub memory_filter: Option<usize>,
@@ -382,6 +405,12 @@ impl App {
             term_running: false,
             agent_steps: 0,
             streamed_actions: 0,
+            live_msg: None,
+            live_done: HashSet::new(),
+            live_accepted: HashSet::new(),
+            live_rejected: HashSet::new(),
+            live_new_files: HashSet::new(),
+            parked: HashMap::new(),
             scout_must: Vec::new(),
             scout_files: Vec::new(),
             workspaces: workspace_list,
@@ -658,29 +687,33 @@ impl App {
                 Task::none()
             }
             Message::DiscardEdits => {
-                if let Some(doc) = self.code.as_mut() {
-                    doc.clear_all();
-                    self.status = "Discarded all AI changes".into();
-                }
+                self.reject_file();
                 Task::none()
             }
             Message::ApplyEdits => {
-                if let Some(doc) = self.code.as_mut() {
-                    self.status = match doc.apply() {
-                        Ok(0) => "Nothing to apply".into(),
-                        Ok(count) => format!("Applied {count} change(s) to {}", doc.rel),
-                        Err(e) => e,
-                    };
-                }
+                self.accept_file();
                 Task::none()
             }
-            Message::UndoApply => {
-                if let Some(doc) = self.code.as_mut() {
-                    self.status = match doc.undo_apply() {
-                        Ok(()) => format!("Restored {} to before the last apply", doc.rel),
-                        Err(e) => e,
-                    };
-                }
+            Message::UndoApply => self.undo_accept(),
+            Message::AcceptHunk(index) => {
+                self.accept_hunk(index);
+                Task::none()
+            }
+            Message::RejectHunk(index) => {
+                self.reject_hunk(index);
+                Task::none()
+            }
+            Message::AcceptAllFiles => {
+                self.accept_everything();
+                Task::none()
+            }
+            Message::RejectAllFiles => {
+                self.reject_everything();
+                Task::none()
+            }
+            Message::ToggleLiveEdit(v) => {
+                self.cfg.live_edit = v;
+                self.persist();
                 Task::none()
             }
             Message::ToggleThinking(index) => {
@@ -1024,8 +1057,8 @@ impl App {
                 if self.stream_buf.is_empty() {
                     return Task::none();
                 }
-                self.flush_stream();
-                scroll_to_end()
+                let follow = self.flush_stream();
+                Task::batch([scroll_to_end(), follow])
             }
             Message::TogglePalette => {
                 self.palette_open = !self.palette_open;
@@ -1058,6 +1091,9 @@ impl App {
                     Command::OpenProjects => self.update(Message::Navigate(Screen::Projects)),
                     Command::RefreshModels => self.update(Message::RefreshModels),
                     Command::RevertLast => self.update(Message::RevertLast),
+                    Command::AcceptAll => self.update(Message::AcceptAllFiles),
+                    Command::RejectAll => self.update(Message::RejectAllFiles),
+                    Command::UndoEdit => self.update(Message::UndoApply),
                     Command::ToggleEditMode => {
                         let next = !self.edit_mode;
                         self.update(Message::ToggleEditMode(next))
@@ -1181,6 +1217,7 @@ impl App {
         self.streamed_actions = 0;
         self.messages
             .push(ChatMessage::new(Role::Assistant, String::new()));
+        self.begin_live(self.messages.len() - 1);
         self.begin_stage(Phase::Executing);
         self.status = format!(
             "Answering with {}...{}",
@@ -1226,22 +1263,23 @@ impl App {
                 Task::none()
             }
             StreamEvent::Done => {
-                self.flush_stream();
-                self.on_stage_done()
+                let follow = self.flush_stream();
+                Task::batch([follow, self.on_stage_done()])
             }
             StreamEvent::Error(error) => self.fail(error),
         }
     }
 
-    fn flush_stream(&mut self) {
+    fn flush_stream(&mut self) -> Task<Message> {
         if self.stream_buf.is_empty() {
-            return;
+            return Task::none();
         }
         let buf = std::mem::take(&mut self.stream_buf);
         self.append_content(&buf);
         if buf.contains('`') {
             self.apply_streamed(false);
         }
+        self.sync_live()
     }
 
     fn on_stage_done(&mut self) -> Task<Message> {
@@ -1298,7 +1336,12 @@ impl App {
                 let idx = self.messages.len().saturating_sub(1);
                 let mut next = Task::none();
 
-                if self.cfg.auto_apply {
+                if self.live_wanted(idx) {
+                    // New files and (with auto-apply) deletes are written now; edits to
+                    // existing files wait in the code panel for accept / reject.
+                    self.apply_streamed(true);
+                    next = self.finish_live(idx);
+                } else if self.cfg.auto_apply {
                     self.apply_streamed(true); // flush anything left (e.g. unclosed last fence)
                     let (ok, bad) = self.edit_counts(idx);
                     if ok + bad > 0 {
@@ -1364,6 +1407,7 @@ impl App {
 
     fn stop(&mut self) -> Task<Message> {
         self.stream_buf.clear();
+        self.drop_live_typing();
         if let Some(handle) = self.abort.take() {
             handle.abort();
         }
@@ -1380,6 +1424,7 @@ impl App {
     fn fail(&mut self, error: String) -> Task<Message> {
         // Drop an empty bubble left behind by a failed stream.
         self.stream_buf.clear();
+        self.drop_live_typing();
         let empty_bubble = matches!(
             self.messages.last(),
             Some(m) if matches!(m.role, Role::Assistant | Role::Plan)
@@ -1439,9 +1484,11 @@ impl App {
         let Some(project) = &self.project else {
             return Task::none();
         };
-        match CodeDoc::open(&project.root, &rel) {
+        let _ = project;
+        match self.take_doc(&rel) {
             Ok(doc) => {
                 self.status = format!("Opened {rel}");
+                self.park_open_doc();
                 self.code = Some(doc);
                 self.code_scroll_y = 0.0;
                 self.suggest_line = None;
@@ -1457,7 +1504,7 @@ impl App {
     }
 
     fn close_code(&mut self) {
-        self.code = None;
+        self.park_open_doc();
         self.suggest_line = None;
         self.suggest_input.clear();
         self.suggesting = None;
@@ -1539,7 +1586,8 @@ impl App {
                     project.entries.len(),
                     if project.truncated { ", truncated" } else { "" }
                 );
-                self.close_code();
+                self.reset_review();
+                self.code = None;
                 self.project = Some(project);
                 self.expanded.clear();
                 self.attached.clear();
@@ -1577,6 +1625,8 @@ impl App {
     }
 
     fn close_project(&mut self) {
+        self.reset_review();
+        self.code = None;
         self.close_code();
         self.project = None;
         self.expanded.clear();
@@ -2259,6 +2309,8 @@ impl App {
     /// Open the project's linked folder unless it is already the open one.
     fn sync_folder(&mut self, slug: &str) {
         let Some(path) = workspaces::linked_folder(slug) else {
+            self.reset_review();
+            self.code = None;
             self.close_code();
             self.project = None;
             self.expanded.clear();
@@ -2296,10 +2348,11 @@ impl App {
     /// Apply blocks of the assistant reply that are complete. `final_pass` also reads a
     /// truncated last block. Each block is written and verified before the next one.
     fn apply_streamed(&mut self, final_pass: bool) {
-        if !self.cfg.auto_apply || self.project.is_none() {
+        let idx = self.messages.len().saturating_sub(1);
+        let live = self.live_wanted(idx);
+        if (!self.cfg.auto_apply && !live) || self.project.is_none() {
             return;
         }
-        let idx = self.messages.len().saturating_sub(1);
         let Some(msg) = self.messages.get(idx).filter(|m| m.role == Role::Assistant) else {
             return;
         };
@@ -2313,7 +2366,39 @@ impl App {
             return;
         }
         self.streamed_actions = actions.len();
-        self.apply_actions(idx, &actions, |i| i >= start);
+
+        if !live {
+            self.apply_actions(idx, &actions, |i| i >= start);
+            return;
+        }
+
+        // Live review: edits to existing files are staged in the code panel instead.
+        // Only new files (and deletes, when auto-apply is on) are written here.
+        let root = self.edit_root().ok();
+        let mask: Vec<bool> = actions
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                if i < start {
+                    return false;
+                }
+                match a {
+                    Action::Edit { path, .. } => root
+                        .as_ref()
+                        .is_some_and(|r| !r.join(workspace::clean(path)).is_file()),
+                    Action::Delete(_) => self.cfg.auto_apply,
+                    Action::Run(_) => false,
+                }
+            })
+            .collect();
+        for (i, picked) in mask.iter().enumerate() {
+            if *picked && matches!(actions[i], Action::Edit { .. }) {
+                self.live_new_files.insert(i);
+            }
+        }
+        if mask.iter().any(|m| *m) {
+            self.apply_actions(idx, &actions, |i| mask.get(i).copied().unwrap_or(false));
+        }
     }
 
     fn apply_edits(&mut self, msg_idx: usize, only: Option<usize>) {
@@ -2472,6 +2557,7 @@ impl App {
 
     /// Reload the open file and rescan the tree after files changed on disk.
     fn after_disk_change(&mut self, files: &[String]) {
+        self.parked.retain(|rel, _| !files.contains(rel));
         if let Some(doc) = self.code.as_mut() {
             if files.iter().any(|f| *f == doc.rel) {
                 let _ = doc.reload();
@@ -2575,6 +2661,15 @@ fn shortcut(key: keyboard::Key, mods: keyboard::Modifiers) -> Option<Message> {
         Key::Character("n") if mods.command() => Some(Message::NewChat),
         Key::Character("b") if mods.command() => Some(Message::TogglePanel),
         Key::Character("j") if mods.command() => Some(Message::ToggleTerminal),
+        Key::Character(c) if mods.command() && mods.shift() && c.eq_ignore_ascii_case("y") => {
+            Some(Message::RejectAllFiles)
+        }
+        Key::Character(c) if mods.command() && mods.shift() && c.eq_ignore_ascii_case("u") => {
+            Some(Message::UndoApply)
+        }
+        Key::Character(c) if mods.command() && c.eq_ignore_ascii_case("y") => {
+            Some(Message::AcceptAllFiles)
+        }
         Key::Named(Named::Escape) => Some(Message::ClosePalette),
         _ => None,
     }

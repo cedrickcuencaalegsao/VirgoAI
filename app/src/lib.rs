@@ -6,7 +6,7 @@ use iced::widget::{scrollable, text_editor};
 use iced::{Subscription, Task, Theme, keyboard};
 
 use terminal::{self, RunResult};
-use workspace::{self, Action, ChangeSet};
+use workspace::{self, Action, ChangeSet, HunkState, LiveHunk};
 
 use agent::pipeline::{self, Intent, Pending, Proposal};
 use agent::plan::PlanRun;
@@ -130,15 +130,14 @@ pub enum Message {
     SuggestInputChanged(String),
     SubmitSuggestion,
     CancelSuggest,
+    AcceptHunk(u32),
+    RejectHunk(u32),
     /// (file, line, model reply or error)
     SuggestionReady(String, usize, Result<String, String>),
     RevertLine(usize),
     DiscardEdits,
     ApplyEdits,
     UndoApply,
-    /// Accept / reject one change group of the open file (index into `doc.groups`).
-    AcceptHunk(usize),
-    RejectHunk(usize),
     /// Accept / reject every pending change in every file.
     AcceptAllFiles,
     RejectAllFiles,
@@ -283,7 +282,13 @@ pub struct App {
     pub suggest_input: String,
     /// Line with a model request in flight.
     pub suggesting: Option<usize>,
-
+    /// Message index whose edit blocks are shown live in the code panel.
+    pub live_msg: Option<usize>,
+    /// Hunks already handed to the editor, per edit block.
+    live_committed: HashMap<usize, usize>,
+    /// Finished hunks for files that are not open yet: (path, search, replace).
+    live_queue: Vec<(String, String, String)>,
+    live_seen: usize,
     /// Files that are always read: open in the code panel, attached, @mentioned.
     scout_must: Vec<String>,
     /// Files the planner actually read for this request.
@@ -316,15 +321,14 @@ pub struct App {
     pub agent_steps: u8,
     pub streamed_actions: usize,
 
-    // Live review of model edits (see live.rs)
-    /// The assistant message whose edits are being reviewed live.
-    pub live_msg: Option<usize>,
     /// Hunks that are staged, accepted or rejected: they are not staged again.
     live_done: HashSet<(usize, usize)>,
     pub live_accepted: HashSet<(usize, usize)>,
     pub live_rejected: HashSet<(usize, usize)>,
     /// Edit blocks that created a new file (written directly, not reviewed).
     live_new_files: HashSet<usize>,
+    /// (file, hunk id in that file) -> (reply action, hunk number) of the streamed reply.
+    live_map: HashMap<(String, u32), (usize, usize)>,
     /// Files with pending changes that are not open right now.
     parked: HashMap<String, CodeDoc>,
 
@@ -397,6 +401,10 @@ impl App {
             suggest_line: None,
             suggest_input: String::new(),
             suggesting: None,
+            live_msg: None,
+            live_committed: HashMap::new(),
+            live_queue: Vec::new(),
+            live_seen: 0,
             changes: Vec::new(),
             action_status: HashMap::new(),
             show_terminal: false,
@@ -405,11 +413,11 @@ impl App {
             term_running: false,
             agent_steps: 0,
             streamed_actions: 0,
-            live_msg: None,
             live_done: HashSet::new(),
             live_accepted: HashSet::new(),
             live_rejected: HashSet::new(),
             live_new_files: HashSet::new(),
+            live_map: HashMap::new(),
             parked: HashMap::new(),
             scout_must: Vec::new(),
             scout_files: Vec::new(),
@@ -496,6 +504,7 @@ impl App {
             // ---- chat ----
             Message::NewChat => {
                 if !self.is_busy() {
+                    self.live_reset();
                     self.messages.clear();
                     self.current_chat = None;
                     self.chat_project = None;
@@ -695,12 +704,12 @@ impl App {
                 Task::none()
             }
             Message::UndoApply => self.undo_accept(),
-            Message::AcceptHunk(index) => {
-                self.accept_hunk(index);
+            Message::AcceptHunk(id) => {
+                self.accept_hunk(id);
                 Task::none()
             }
-            Message::RejectHunk(index) => {
-                self.reject_hunk(index);
+            Message::RejectHunk(id) => {
+                self.reject_hunk(id);
                 Task::none()
             }
             Message::AcceptAllFiles => {
@@ -1057,8 +1066,8 @@ impl App {
                 if self.stream_buf.is_empty() {
                     return Task::none();
                 }
-                let follow = self.flush_stream();
-                Task::batch([scroll_to_end(), follow])
+                let live = self.flush_stream();
+                Task::batch([live, scroll_to_end()])
             }
             Message::TogglePalette => {
                 self.palette_open = !self.palette_open;
@@ -1263,8 +1272,8 @@ impl App {
                 Task::none()
             }
             StreamEvent::Done => {
-                let follow = self.flush_stream();
-                Task::batch([follow, self.on_stage_done()])
+                let live = self.flush_stream();
+                Task::batch([live, self.on_stage_done()])
             }
             StreamEvent::Error(error) => self.fail(error),
         }
@@ -1279,7 +1288,11 @@ impl App {
         if buf.contains('`') {
             self.apply_streamed(false);
         }
-        self.sync_live()
+        if self.live_active() {
+            let open = self.live_update(false);
+            return Task::batch([open, self.live_follow()]);
+        }
+        Task::none()
     }
 
     fn on_stage_done(&mut self) -> Task<Message> {
@@ -1335,7 +1348,15 @@ impl App {
                 self.phase = Phase::Idle;
                 let idx = self.messages.len().saturating_sub(1);
                 let mut next = Task::none();
-
+                let live_task = if self.live_active() {
+                    self.live_update(true)
+                } else {
+                    Task::none()
+                };
+                let live_used = self.live_msg == Some(idx) && self.live_seen > 0;
+                if let Some(doc) = self.code.as_mut() {
+                    doc.clear_live();
+                }
                 if self.live_wanted(idx) {
                     // New files and (with auto-apply) deletes are written now; edits to
                     // existing files wait in the code panel for accept / reject.
@@ -1351,6 +1372,18 @@ impl App {
                         if bad > 0 {
                             next = self.retry_failed(idx);
                         }
+                    } else if live_used {
+                        let failed = self.code.as_ref().map_or(0, |d| d.failed_hunks());
+                        self.status = format!(
+                            "{} change(s) ready. Accept or reject each one in the code panel.{}",
+                            self.live_seen,
+                            if failed > 0 {
+                                format!(" {failed} could not be located in the file.")
+                            } else {
+                                String::new()
+                            }
+                        );
+                        next = live_task;
                     } else if self.intent == Intent::Change {
                         self.status =
                             "The executor produced no edit blocks, so no file was changed.".into();
@@ -1406,6 +1439,9 @@ impl App {
     }
 
     fn stop(&mut self) -> Task<Message> {
+        if let Some(doc) = self.code.as_mut() {
+            doc.clear_live();
+        }
         self.stream_buf.clear();
         self.drop_live_typing();
         if let Some(handle) = self.abort.take() {
@@ -1422,6 +1458,9 @@ impl App {
     }
 
     fn fail(&mut self, error: String) -> Task<Message> {
+        if let Some(doc) = self.code.as_mut() {
+            doc.clear_live();
+        }
         // Drop an empty bubble left behind by a failed stream.
         self.stream_buf.clear();
         self.drop_live_typing();
@@ -1477,6 +1516,211 @@ impl App {
         };
         task
     }
+
+    // ---- live editing -----------------------------------------------------
+
+    /// Stream edit blocks into the code panel instead of writing them to disk.
+    /// Off in Auto mode and while a structured plan runs (steps apply their own edits).
+    fn live_active(&self) -> bool {
+        self.project.is_some()
+            && !self.cfg.auto_apply
+            && !self.plan_run.as_ref().is_some_and(|r| r.cur.is_some())
+    }
+
+    fn live_reset(&mut self) {
+        self.live_msg = None;
+        self.live_committed.clear();
+        self.live_queue.clear();
+        self.live_seen = 0;
+    }
+
+    /// True when edit blocks of this message for `path` are handled by the code panel,
+    /// so the chat should not show a second Apply button for them.
+    pub fn live_handles(&self, msg: usize, path: &str) -> bool {
+        self.live_msg == Some(msg)
+            && self
+                .project
+                .as_ref()
+                .is_some_and(|p| p.is_file(path.trim().trim_matches('`').trim_start_matches("./")))
+    }
+
+    /// Hand new hunks of the streaming reply to the code panel.
+    fn live_update(&mut self, final_pass: bool) -> Task<Message> {
+        let idx = self.messages.len().saturating_sub(1);
+        let content = match self.messages.get(idx) {
+            Some(m) if m.role == Role::Assistant => m.content.clone(),
+            _ => return Task::none(),
+        };
+        let edits = workspace::parse_live(&content);
+        if edits.is_empty() {
+            return Task::none();
+        }
+        if self.live_msg != Some(idx) {
+            self.live_reset();
+            if self.edit_root().is_err() {
+                return Task::none();
+            }
+            self.live_msg = Some(idx);
+        }
+
+        let mut done: Vec<(String, String, String)> = Vec::new();
+        let mut tail: Option<(String, LiveHunk)> = None;
+        for (e, edit) in edits.iter().enumerate() {
+            let path = edit
+                .path
+                .trim()
+                .trim_matches('`')
+                .trim_start_matches("./")
+                .to_string();
+            // New files are not handled here (they keep the Apply card).
+            if !self.project.as_ref().is_some_and(|p| p.is_file(&path)) {
+                continue;
+            }
+            let seen = self.live_committed.get(&e).copied().unwrap_or(0);
+            let finished = edit
+                .hunks
+                .iter()
+                .take_while(|h| h.state == HunkState::Done)
+                .count();
+            for h in &edit.hunks[seen.min(finished)..finished] {
+                done.push((path.clone(), h.search.clone(), h.replace.clone()));
+            }
+            self.live_committed.insert(e, finished);
+            if !final_pass {
+                if let Some(h) = edit.hunks.get(finished) {
+                    tail = Some((path, h.clone()));
+                }
+            }
+        }
+
+        let mut tasks = Vec::new();
+        for (path, search, replace) in done {
+            self.live_seen += 1;
+            if let Some(t) = self.live_stage(path, search, replace) {
+                tasks.push(t);
+            }
+        }
+
+        match tail {
+            Some((path, hunk)) => {
+                let shown = self.code.as_ref().is_some_and(|d| d.rel == path);
+                let free = self.code.as_ref().map_or(true, |d| !d.has_edits());
+                if !shown && free {
+                    tasks.push(self.open_file(path.clone()));
+                }
+                if let Some(doc) = self.code.as_mut() {
+                    if doc.rel == path {
+                        doc.set_live(
+                            &hunk.search,
+                            &hunk.replace,
+                            hunk.state == HunkState::Writing,
+                        );
+                    }
+                }
+            }
+            None => {
+                if let Some(doc) = self.code.as_mut() {
+                    doc.clear_live();
+                }
+            }
+        }
+        Task::batch(tasks)
+    }
+
+    /// A finished hunk: stage it in the open file, or queue it for a later file.
+    fn live_stage(
+        &mut self,
+        path: String,
+        search: String,
+        replace: String,
+    ) -> Option<Task<Message>> {
+        let shown = self.code.as_ref().is_some_and(|d| d.rel == path);
+        let free = self.code.as_ref().map_or(true, |d| !d.has_edits());
+        let mut task = None;
+        if !shown && free {
+            task = Some(self.open_file(path.clone()));
+        }
+        match self.code.as_mut() {
+            Some(doc) if doc.rel == path => {
+                doc.add_pending(search, replace);
+            }
+            _ => self.live_queue.push((path, search, replace)),
+        }
+        task
+    }
+
+    /// When the open file has nothing left to decide, show the next queued file.
+    // fn advance_live(&mut self) -> Task<Message> {
+    //     let busy = self.code.as_ref().is_some_and(|d| d.has_edits());
+    //     if busy || self.live_queue.is_empty() {
+    //         return Task::none();
+    //     }
+    //     let path = self.live_queue[0].0.clone();
+    //     let task = self.open_file(path.clone());
+    //     let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.live_queue)
+    //         .into_iter()
+    //         .partition(|(p, _, _)| *p == path);
+    //     self.live_queue = rest;
+    //     if let Some(doc) = self.code.as_mut() {
+    //         if doc.rel == path {
+    //             for (_, search, replace) in mine {
+    //                 doc.add_pending(search, replace);
+    //             }
+    //         }
+    //     }
+    //     self.status = format!("Next file: {path}");
+    //     task
+    // }
+
+    /// Keep the hunk being typed in view.
+    fn live_follow(&self) -> Task<Message> {
+        const ROW_H: f32 = 24.0; // same as code_panel::ROW_H
+        let Some((first, last)) = self.code.as_ref().and_then(|d| d.live_span()) else {
+            return Task::none();
+        };
+        let top = first as f32 * ROW_H;
+        let bottom = (last as f32 + 1.0) * ROW_H;
+        let (y, h) = (self.code_scroll_y, self.code_view_h);
+        if top >= y && bottom <= y + h - ROW_H {
+            return Task::none();
+        }
+        scrollable::scroll_to(
+            shared::code_scroll_id(),
+            scrollable::AbsoluteOffset {
+                x: 0.0,
+                y: (bottom - h * 0.7).max(0.0),
+            },
+        )
+    }
+
+    // fn accept_hunk(&mut self, id: u32) -> Task<Message> {
+    //     let Some(doc) = self.code.as_mut() else {
+    //         return Task::none();
+    //     };
+    //     match doc.accept(id) {
+    //         Ok((before, after)) => {
+    //             let rel = doc.rel.clone();
+    //             self.status = format!("Accepted a change in {rel}");
+    //             self.record_change(rel, before, after);
+    //             self.advance_live()
+    //         }
+    //         Err(e) => {
+    //             self.status = e;
+    //             Task::none()
+    //         }
+    //     }
+    // }
+
+    /// Make an accepted change show up in the Changes tab and "Revert last AI edit".
+    // fn record_change(&mut self, rel: String, before: String, after: String) {
+    //     let mut set = ChangeSet::new();
+    //     set.record(FileChange {
+    //         rel,
+    //         before: Some(before),
+    //         after: Some(after),
+    //     });
+    //     self.changes.push(set);
+    // }
 
     // ---- code panel -------------------------------------------------------
 

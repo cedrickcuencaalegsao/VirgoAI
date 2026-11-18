@@ -1,7 +1,13 @@
-//! The file open in the code panel, plus the AI line edits waiting to be applied.
+//! The file open in the code panel, plus the AI edits waiting to be accepted or rejected.
 //!
-//! Edits are kept separate from the file: each one replaces a single original
-//! line with zero or more new lines. Nothing touches the disk until `apply()`.
+//! Two kinds of pending edit exist:
+//! * line edits (`edits`): one original line -> zero or more new lines (the bulb suggestions);
+//! * hunks (`pending`): SEARCH/REPLACE blocks from the model. A hunk is stored as TEXT and is
+//!   re-located in the file whenever the file changes (`restage`), so accepting one hunk never
+//!   leaves the others pointing at stale line numbers.
+//!
+//! One extra "live" hunk (`LIVE_ID`) shows what the model is typing right now.
+//! Nothing touches the disk until `accept`, `apply` or `undo_apply`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -15,6 +21,9 @@ const MAX_BYTES: u64 = 1_000_000;
 const MAX_DISPLAY_CHARS: usize = 300;
 /// Approximate width of one monospace character at the code font size.
 const CHAR_W: f32 = 8.0;
+
+/// Id of the hunk the model is still typing. Real hunks start at 1.
+pub const LIVE_ID: u32 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RowKind {
@@ -33,45 +42,47 @@ pub struct RowRef<'a> {
     pub line: usize,
     /// Line number to show in the gutter (original numbering).
     pub number: Option<usize>,
-    /// Whether to show the suggest / revert buttons on this row.
+    /// Whether to show buttons on this row.
     pub show_actions: bool,
-    /// Set on the first row of a change group: the group the accept / reject
-    /// buttons act on.
-    pub hunk: Option<usize>,
-    /// The group is still being written by the model (no accept button yet).
-    pub typing: bool,
+    /// Set on the FIRST red row of a hunk: the id for Accept / Reject.
+    /// `Some(LIVE_ID)` means the model is still typing it.
+    pub hunk: Option<u32>,
     pub src: &'a str,
 }
 
-/// One AI change: the original lines `first..=last` and their replacement.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Group {
-    /// (reply action, hunk number) when the change comes from a streamed reply.
-    pub key: Option<(usize, usize)>,
-    pub first: usize,
-    pub last: usize,
-    /// The model is still writing the replacement text.
-    pub typing: bool,
+/// A SEARCH/REPLACE block waiting for the user.
+#[derive(Debug, Clone)]
+pub struct PendingHunk {
+    pub id: u32,
+    pub search: String,
+    pub replace: String,
+    /// Why it could not be located in the file right now.
+    pub error: Option<String>,
 }
 
-/// One step of the undo history: the file as it was before an accept.
-#[derive(Debug, Clone)]
-struct Snapshot {
-    text: String,
-    /// Streamed changes that this accept wrote, so they can be shown again.
-    keys: Vec<(usize, usize)>,
+#[derive(Debug, Clone, Copy)]
+struct Group {
+    id: u32,
+    start: usize,
+    len: usize,
 }
 
 pub struct CodeDoc {
     pub rel: String,
     pub path: PathBuf,
     pub lines: Vec<String>,
-    /// Pending AI edits: original line index -> replacement lines (empty = delete).
+    /// Pending edits by original line index -> replacement lines (empty = delete).
+    /// Includes the lines owned by hunk groups.
     pub edits: BTreeMap<usize, Vec<String>>,
-    /// The pending edits grouped per change (one SEARCH/REPLACE block each).
-    pub groups: Vec<Group>,
-    /// File contents before each accept, newest last (multi-level undo).
-    undo: Vec<Snapshot>,
+    /// File content before the last accept/apply, so it can be undone once.
+    pub previous: Option<String>,
+    /// Hunks that the last accept/apply consumed (they come back on undo).
+    previous_hunks: Vec<PendingHunk>,
+    /// Model hunks waiting for Accept / Reject.
+    pub pending: Vec<PendingHunk>,
+    groups: Vec<Group>,
+    live: bool,
+    next_id: u32,
     original_text: String,
     crlf: bool,
     trailing_newline: bool,
@@ -86,10 +97,12 @@ impl CodeDoc {
         let path = root.join(rel);
         let meta = fs::metadata(&path).map_err(|e| format!("{rel}: {e}"))?;
         if meta.len() > MAX_BYTES {
-            return Err(format!("{rel} is larger than 1 MB, so it is not opened here"));
+            return Err(format!(
+                "{rel} is larger than 1 MB, so it is not opened here"
+            ));
         }
-        let text = fs::read_to_string(&path)
-            .map_err(|_| format!("{rel} is not a UTF-8 text file"))?;
+        let text =
+            fs::read_to_string(&path).map_err(|_| format!("{rel} is not a UTF-8 text file"))?;
         Ok(Self::from_text(rel.to_string(), path, text))
     }
 
@@ -99,8 +112,12 @@ impl CodeDoc {
             path,
             lines: text.lines().map(String::from).collect(),
             edits: BTreeMap::new(),
+            previous: None,
+            previous_hunks: Vec::new(),
+            pending: Vec::new(),
             groups: Vec::new(),
-            undo: Vec::new(),
+            live: false,
+            next_id: 1,
             crlf: text.contains("\r\n"),
             trailing_newline: text.ends_with('\n'),
             original_text: text,
@@ -110,89 +127,238 @@ impl CodeDoc {
         doc
     }
 
-    /// Re-read the file from disk. Pending edits are dropped.
+    /// Re-read the file from disk. Line edits are dropped; model hunks are kept and
+    /// re-located in the new text.
     pub fn reload(&mut self) -> Result<(), String> {
         let text = fs::read_to_string(&self.path)
             .map_err(|e| format!("Could not reload {}: {e}", self.rel))?;
+        let pending = std::mem::take(&mut self.pending);
+        let next_id = self.next_id;
         *self = Self::from_text(self.rel.clone(), self.path.clone(), text);
+        self.pending = pending;
+        self.next_id = next_id;
+        self.restage();
         Ok(())
     }
 
-    // ---- edits -----------------------------------------------------------
+    /// The text of the file as last read from or written to disk.
+    pub fn text(&self) -> &str {
+        &self.original_text
+    }
+
+    // ---- hunks (live editing) ---------------------------------------------
+
+    /// Queue a finished SEARCH/REPLACE block. Returns its id.
+    pub fn add_pending(&mut self, search: String, replace: String) -> u32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.pending.push(PendingHunk {
+            id,
+            search,
+            replace,
+            error: None,
+        });
+        self.restage();
+        id
+    }
+
+    /// Show the hunk the model is typing. Before its SEARCH is complete nothing is drawn
+    /// (`writing == false`); afterwards the matched lines turn red and the text typed so far
+    /// shows as green rows followed by a cursor.
+    pub fn set_live(&mut self, search: &str, replace: &str, writing: bool) {
+        self.clear_live();
+        self.live = true;
+        if !writing {
+            return;
+        }
+        let Ok((start, n)) = locate(&self.lines, search) else {
+            return;
+        };
+        if self
+            .groups
+            .iter()
+            .any(|g| start < g.start + g.len && g.start < start + n)
+        {
+            return;
+        }
+        let mut shown: Vec<String> = replace.lines().map(String::from).collect();
+        match shown.last_mut() {
+            Some(last) => last.push('\u{258D}'),
+            None => shown.push("\u{258D}".to_string()),
+        }
+        self.edits.insert(start, shown);
+        for i in start + 1..start + n {
+            self.edits.insert(i, Vec::new());
+        }
+        self.groups.push(Group {
+            id: LIVE_ID,
+            start,
+            len: n,
+        });
+        self.recompute_width();
+    }
+
+    pub fn clear_live(&mut self) {
+        self.live = false;
+        if let Some(pos) = self.groups.iter().position(|g| g.id == LIVE_ID) {
+            let g = self.groups.remove(pos);
+            for i in g.start..g.start + g.len {
+                self.edits.remove(&i);
+            }
+            self.recompute_width();
+        }
+    }
+
+    /// The model is typing into this file right now.
+    pub fn is_live(&self) -> bool {
+        self.live
+    }
+
+    /// Anything on screen that the user still has to decide on.
+    pub fn has_edits(&self) -> bool {
+        !self.edits.is_empty() || self.live
+    }
+
+    /// Hunks that could not be found in the file.
+    pub fn failed_hunks(&self) -> usize {
+        self.pending.iter().filter(|p| p.error.is_some()).count()
+    }
+
+    /// Number of things to accept: located hunks plus single-line suggestions.
+    pub fn change_count(&self) -> usize {
+        let hunks = self.groups.iter().filter(|g| g.id != LIVE_ID).count();
+        let owned: usize = self.groups.iter().map(|g| g.len).sum();
+        hunks + self.edits.len().saturating_sub(owned)
+    }
+
+    /// First and last display row of the live hunk (for auto-scroll).
+    pub fn live_span(&self) -> Option<(usize, usize)> {
+        let g = self.groups.iter().find(|g| g.id == LIVE_ID)?;
+        let first = self.row_of(g.start);
+        let added = self.edits.get(&g.start).map_or(0, |r| r.len());
+        Some((first, first + g.len + added))
+    }
+
+    /// Display row index at which original line `line` starts.
+    pub fn row_of(&self, line: usize) -> usize {
+        (0..line.min(self.lines.len()))
+            .map(|i| 1 + self.edits.get(&i).map_or(0, |r| r.len()))
+            .sum()
+    }
+
+    /// Write ONE hunk to disk. Returns (content before, content after) so the caller can
+    /// record it for "Revert". The other hunks stay pending and are re-located.
+    pub fn accept(&mut self, id: u32) -> Result<(String, String), String> {
+        let idx = self
+            .pending
+            .iter()
+            .position(|p| p.id == id)
+            .ok_or("that change no longer exists")?;
+        let Some(g) = self.groups.iter().find(|g| g.id == id).copied() else {
+            return Err(self.pending[idx]
+                .error
+                .clone()
+                .unwrap_or_else(|| "that change could not be located".into()));
+        };
+        self.ensure_unchanged_on_disk()?;
+
+        let replace: Vec<String> = self.pending[idx]
+            .replace
+            .lines()
+            .map(String::from)
+            .collect();
+        let mut out: Vec<String> = Vec::with_capacity(self.lines.len());
+        for (i, line) in self.lines.iter().enumerate() {
+            if i == g.start {
+                out.extend(replace.iter().cloned());
+            }
+            if i < g.start || i >= g.start + g.len {
+                out.push(line.clone());
+            }
+        }
+
+        let new_text = self.join(&out);
+        fs::write(&self.path, &new_text)
+            .map_err(|e| format!("Could not write {}: {e}", self.rel))?;
+
+        // Keep single-line suggestions in place: shift the ones below the hunk.
+        let delta = replace.len() as isize - g.len as isize;
+        self.drop_group_edits();
+        let old = std::mem::take(&mut self.edits);
+        for (k, v) in old {
+            if k < g.start {
+                self.edits.insert(k, v);
+            } else if k >= g.start + g.len {
+                self.edits.insert((k as isize + delta) as usize, v);
+            }
+        }
+
+        let before = std::mem::replace(&mut self.original_text, new_text.clone());
+        self.previous = Some(before.clone());
+        self.previous_hunks = vec![self.pending.remove(idx)];
+        self.lines = out;
+        self.restage();
+        Ok((before, new_text))
+    }
+
+    /// Drop one hunk without touching the file.
+    pub fn reject(&mut self, id: u32) {
+        self.pending.retain(|p| p.id != id);
+        self.restage();
+    }
+
+    /// Remove the edit rows owned by hunk groups (the live one included).
+    fn drop_group_edits(&mut self) {
+        for g in std::mem::take(&mut self.groups) {
+            for i in g.start..g.start + g.len {
+                self.edits.remove(&i);
+            }
+        }
+    }
+
+    /// Find every pending hunk in the current text and rebuild the rows they own.
+    fn restage(&mut self) {
+        self.drop_group_edits();
+        let mut used: Vec<(usize, usize)> = Vec::new();
+        let mut pending = std::mem::take(&mut self.pending);
+        for p in pending.iter_mut() {
+            match locate(&self.lines, &p.search) {
+                Ok((start, n)) => {
+                    if used.iter().any(|(s, l)| start < s + l && *s < start + n) {
+                        p.error = Some("overlaps another change".into());
+                        continue;
+                    }
+                    used.push((start, n));
+                    p.error = None;
+                    self.edits
+                        .insert(start, p.replace.lines().map(String::from).collect());
+                    for i in start + 1..start + n {
+                        self.edits.insert(i, Vec::new());
+                    }
+                    self.groups.push(Group {
+                        id: p.id,
+                        start,
+                        len: n,
+                    });
+                }
+                Err(e) => p.error = Some(e),
+            }
+        }
+        self.pending = pending;
+        self.recompute_width();
+    }
+
+    // ---- line edits --------------------------------------------------------
 
     /// Turn a SEARCH/REPLACE block into pending line edits. The first matched
     /// line gets the replacement, the other matched lines are deleted.
     pub fn stage(&mut self, search: &str, replace: &str) -> Result<(), String> {
-        self.stage_keyed(None, search, replace, false)
-    }
-
-    /// Like `stage`, for a block of a streamed reply. Staging the same `key` again
-    /// replaces the earlier version, so it can be called on every flush while the
-    /// model is still typing (`typing` = the REPLACE text is not finished).
-    pub fn stage_keyed(
-        &mut self,
-        key: Option<(usize, usize)>,
-        search: &str,
-        replace: &str,
-        typing: bool,
-    ) -> Result<(), String> {
-        fn end(s: &str) -> &str {
-            s.trim_end()
-        }
-        fn both(s: &str) -> &str {
-            s.trim()
-        }
-
-        // Drop the previous version of this block first.
-        if let Some(key) = key {
-            if let Some(pos) = self.groups.iter().position(|g| g.key == Some(key)) {
-                self.drop_group(pos);
-            }
-        }
-
-        let needle: Vec<&str> = search.lines().collect();
-        if needle.is_empty() || needle.iter().all(|l| l.trim().is_empty()) {
-            return Err("empty search block".into());
-        }
-        if needle.len() > self.lines.len() {
-            return Err("search block is longer than the file".into());
-        }
-
-        let find = |norm: fn(&str) -> &str| -> Vec<usize> {
-            (0..=self.lines.len() - needle.len())
-                .filter(|&i| {
-                    needle
-                        .iter()
-                        .enumerate()
-                        .all(|(k, n)| norm(&self.lines[i + k]) == norm(n))
-                })
-                .collect()
-        };
-
-        // Exact (ignoring trailing spaces) first, then ignoring indentation.
-        let mut hits = find(end);
-        if hits.is_empty() {
-            hits = find(both);
-        }
-
-        let start = match hits.as_slice() {
-            [] => return Err("search block not found".into()),
-            [start] => *start,
-            _ => return Err("search block matches more than once".into()),
-        };
-        let last = start + needle.len() - 1;
-        if (start..=last).any(|i| self.edits.contains_key(&i)) {
-            return Err("overlaps another pending change".into());
-        }
-
+        let (start, n) = locate(&self.lines, search)?;
         let replacement: Vec<String> = replace.lines().map(String::from).collect();
-        self.edits.insert(start, replacement);
-        for i in start + 1..=last {
-            self.edits.insert(i, Vec::new());
+        self.set_edit(start, replacement);
+        for i in start + 1..start + n {
+            self.set_edit(i, Vec::new());
         }
-        let pos = self.groups.partition_point(|g| g.first < start);
-        self.groups.insert(pos, Group { key, first: start, last, typing });
-        self.recompute_width();
         Ok(())
     }
 
@@ -203,224 +369,89 @@ impl CodeDoc {
         }
     }
 
-    /// Revert one line. A line that belongs to a change group rejects the whole
-    /// group, since half a change would not make sense.
     pub fn clear_edit(&mut self, line: usize) {
-        match self.groups.iter().position(|g| (g.first..=g.last).contains(&line)) {
-            Some(pos) => self.drop_group(pos),
-            None => {
-                self.edits.remove(&line);
-            }
-        }
+        self.edits.remove(&line);
         self.recompute_width();
     }
 
+    /// Reject everything: hunks, live text and line edits.
     pub fn clear_all(&mut self) {
         self.edits.clear();
+        self.pending.clear();
         self.groups.clear();
+        self.live = false;
         self.recompute_width();
     }
 
-    /// Reject one change: the original lines stay as they are.
-    pub fn reject_group(&mut self, index: usize) {
-        if index < self.groups.len() {
-            self.drop_group(index);
-            self.recompute_width();
-        }
-    }
-
-    fn drop_group(&mut self, index: usize) {
-        let group = self.groups.remove(index);
-        for line in group.first..=group.last {
-            self.edits.remove(&line);
-        }
-    }
-
-    /// Number of changes pending: change groups plus loose single-line edits.
-    pub fn change_count(&self) -> usize {
-        let grouped: usize = self.groups.iter().map(|g| g.last - g.first + 1).sum();
-        let loose = self.edits.len().saturating_sub(grouped);
-        self.groups.len() + loose
-    }
-
-    /// Forget which streamed reply the pending changes came from, so a new reply
-    /// cannot replace them. They stay reviewable.
-    pub fn detach_keys(&mut self) {
-        for g in &mut self.groups {
-            g.key = None;
-        }
-    }
-
-    /// Remove changes the model never finished writing (stopped or cut off).
-    pub fn drop_typing(&mut self) {
-        while let Some(pos) = self.groups.iter().position(|g| g.typing) {
-            self.drop_group(pos);
-        }
-        self.recompute_width();
-    }
-
-    pub fn has_pending(&self) -> bool {
-        !self.edits.is_empty()
-    }
-
-    /// Changes whose text is complete (not still being typed).
-    pub fn ready_groups(&self) -> usize {
-        self.groups.iter().filter(|g| !g.typing).count()
-    }
-
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
-    }
-
-    pub fn undo_depth(&self) -> usize {
-        self.undo.len()
-    }
-
-    /// Accept one change: write it to the file and move the other pending changes
-    /// to their new line numbers. Returns the streamed key of the change.
-    pub fn accept_group(&mut self, index: usize) -> Result<Option<(usize, usize)>, String> {
-        let Some(group) = self.groups.get(index).cloned() else {
-            return Err("That change is no longer pending".into());
-        };
-        if group.typing {
-            return Err("The model is still writing this change".into());
-        }
-        self.ensure_unchanged_on_disk()?;
-
-        let mut out: Vec<String> = Vec::with_capacity(self.lines.len());
-        let mut inserted = 0usize;
-        for (i, line) in self.lines.iter().enumerate() {
-            if (group.first..=group.last).contains(&i) {
-                if let Some(rep) = self.edits.get(&i) {
-                    inserted += rep.len();
-                    out.extend(rep.iter().cloned());
-                }
-            } else {
-                out.push(line.clone());
-            }
-        }
-        let removed = group.last - group.first + 1;
-        let new_text = self.join(&out);
-        fs::write(&self.path, &new_text)
-            .map_err(|e| format!("Could not write {}: {e}", self.rel))?;
-
-        // Move everything after the change by the number of lines it added.
-        let shift = |i: usize| -> usize {
-            if i > group.last {
-                i + inserted - removed
-            } else {
-                i
-            }
-        };
-        let mut edits = BTreeMap::new();
-        for (line, rep) in std::mem::take(&mut self.edits) {
-            if !(group.first..=group.last).contains(&line) {
-                edits.insert(shift(line), rep);
-            }
-        }
-        self.edits = edits;
-        self.groups.remove(index);
-        for g in &mut self.groups {
-            g.first = shift(g.first);
-            g.last = shift(g.last);
-        }
-
-        let before = std::mem::replace(&mut self.original_text, new_text);
-        self.undo.push(Snapshot { text: before, keys: group.key.into_iter().collect() });
-        self.lines = out;
-        self.recompute_width();
-        Ok(group.key)
-    }
-
-    /// Write all pending changes to the file. Returns how many were applied.
-    /// Changes that are still being typed stay pending.
+    /// Accept everything: write all pending edits to the file. Returns how many were applied.
     pub fn apply(&mut self) -> Result<usize, String> {
+        self.clear_live(); // never write the half-typed hunk
         if self.edits.is_empty() {
             return Ok(0);
         }
         self.ensure_unchanged_on_disk()?;
 
-        // Only finished changes are written. Lines of a typing group are kept.
-        let typing: Vec<(usize, usize)> = self
-            .groups
-            .iter()
-            .filter(|g| g.typing)
-            .map(|g| (g.first, g.last))
-            .collect();
-        let in_typing = |i: usize| typing.iter().any(|(a, b)| (*a..=*b).contains(&i));
+        let count = self.change_count();
+        let applied: Vec<u32> = self.groups.iter().map(|g| g.id).collect();
 
         let mut out: Vec<String> = Vec::with_capacity(self.lines.len());
-        let mut remap: Vec<usize> = Vec::with_capacity(self.lines.len());
         for (index, line) in self.lines.iter().enumerate() {
-            remap.push(out.len());
             match self.edits.get(&index) {
-                Some(replacement) if !in_typing(index) => out.extend(replacement.iter().cloned()),
-                _ => out.push(line.clone()),
+                None => out.push(line.clone()),
+                Some(replacement) => out.extend(replacement.iter().cloned()),
             }
         }
 
         let new_text = self.join(&out);
-        let count = self.edits.keys().filter(|i| !in_typing(**i)).count();
-        if count == 0 {
-            return Ok(0);
-        }
         fs::write(&self.path, &new_text)
             .map_err(|e| format!("Could not write {}: {e}", self.rel))?;
 
-        let keys: Vec<(usize, usize)> = self
-            .groups
+        self.previous = Some(std::mem::replace(&mut self.original_text, new_text));
+        self.previous_hunks = self
+            .pending
             .iter()
-            .filter(|g| !g.typing)
-            .filter_map(|g| g.key)
+            .filter(|p| applied.contains(&p.id))
+            .cloned()
             .collect();
-        let before = std::mem::replace(&mut self.original_text, new_text);
-        self.undo.push(Snapshot { text: before, keys });
-
-        // Keep the groups that are still being typed, at their new line numbers.
-        let kept: Vec<Group> = self
-            .groups
-            .iter()
-            .filter(|g| g.typing)
-            .map(|g| Group { first: remap[g.first], last: remap[g.last], ..g.clone() })
-            .collect();
-        let mut kept_edits = BTreeMap::new();
-        for g in &self.groups {
-            if g.typing {
-                for i in g.first..=g.last {
-                    if let Some(rep) = self.edits.get(&i) {
-                        kept_edits.insert(remap[i], rep.clone());
-                    }
-                }
-            }
-        }
+        self.pending.retain(|p| !applied.contains(&p.id));
         self.lines = out;
-        self.edits = kept_edits;
-        self.groups = kept;
-        self.recompute_width();
+        self.edits.clear();
+        self.groups.clear();
+        self.restage();
         Ok(count)
     }
 
-    /// Put the file back to how it was before the last accept. Pending changes are
-    /// dropped (their line numbers no longer fit). Returns the streamed changes
-    /// that the undone accept had written, so they can be shown again.
-    pub fn undo_apply(&mut self) -> Result<Vec<(usize, usize)>, String> {
-        let Some(snapshot) = self.undo.last().cloned() else {
+    /// Put the file back to how it was before the last accept. The hunks that were
+    /// accepted come back as pending, so you can decide again.
+    pub fn undo_apply(&mut self) -> Result<(), String> {
+        let Some(previous) = self.previous.clone() else {
             return Err("Nothing to undo".into());
         };
         self.ensure_unchanged_on_disk()?;
-        fs::write(&self.path, &snapshot.text)
+        fs::write(&self.path, &previous)
             .map_err(|e| format!("Could not write {}: {e}", self.rel))?;
 
-        let mut history = std::mem::take(&mut self.undo);
-        history.pop();
-        *self = Self::from_text(self.rel.clone(), self.path.clone(), snapshot.text);
-        self.undo = history;
-        Ok(snapshot.keys)
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.extend(std::mem::take(&mut self.previous_hunks));
+        let next_id = self.next_id;
+        *self = Self::from_text(self.rel.clone(), self.path.clone(), previous);
+        self.pending = pending;
+        self.next_id = next_id;
+        self.restage();
+        Ok(())
     }
 
     // ---- display ---------------------------------------------------------
 
     pub fn rows(&self) -> Vec<RowRef<'_>> {
+        // line -> (group id, is the first line of the group)
+        let mut owner: BTreeMap<usize, (u32, bool)> = BTreeMap::new();
+        for g in &self.groups {
+            for i in g.start..g.start + g.len {
+                owner.insert(i, (g.id, i == g.start));
+            }
+        }
+
         let mut out = Vec::with_capacity(self.lines.len());
         for (index, line) in self.lines.iter().enumerate() {
             match self.edits.get(&index) {
@@ -430,23 +461,16 @@ impl CodeDoc {
                     number: Some(index + 1),
                     show_actions: true,
                     hunk: None,
-                    typing: false,
                     src: line.as_str(),
                 }),
                 Some(replacement) => {
-                    let group = self.groups.iter().position(|g| g.first == index);
-                    let typing = self
-                        .groups
-                        .iter()
-                        .find(|g| (g.first..=g.last).contains(&index))
-                        .is_some_and(|g| g.typing);
+                    let info = owner.get(&index).copied();
                     out.push(RowRef {
                         kind: RowKind::Removed,
                         line: index,
                         number: Some(index + 1),
-                        show_actions: true,
-                        hunk: group,
-                        typing,
+                        show_actions: info.map_or(true, |(_, first)| first),
+                        hunk: info.and_then(|(id, first)| first.then_some(id)),
                         src: line.as_str(),
                     });
                     for new_line in replacement {
@@ -456,7 +480,6 @@ impl CodeDoc {
                             number: None,
                             show_actions: false,
                             hunk: None,
-                            typing,
                             src: new_line.as_str(),
                         });
                     }
@@ -464,22 +487,6 @@ impl CodeDoc {
             }
         }
         out
-    }
-
-    /// Index of the first displayed row of the change that is being typed, so the
-    /// view can follow the model. `None` when nothing is being typed.
-    pub fn typing_row(&self) -> Option<usize> {
-        let group = self.groups.iter().rev().find(|g| g.typing)?;
-        let mut row = 0;
-        for (index, _) in self.lines.iter().enumerate() {
-            if index == group.first {
-                // the last added row of the group
-                let added = self.edits.get(&index).map_or(0, Vec::len);
-                return Some(row + added);
-            }
-            row += 1 + self.edits.get(&index).map_or(0, Vec::len);
-        }
-        None
     }
 
     /// Width of the code column, so long lines scroll sideways instead of wrapping.
@@ -494,7 +501,11 @@ impl CodeDoc {
         let mut out = String::new();
         for index in start..end {
             let marker = if index == line { ">>>" } else { "   " };
-            out.push_str(&format!("{marker} {:>4} | {}\n", index + 1, self.lines[index]));
+            out.push_str(&format!(
+                "{marker} {:>4} | {}\n",
+                index + 1,
+                self.lines[index]
+            ));
         }
         out
     }
@@ -538,6 +549,59 @@ impl CodeDoc {
         }
         Ok(())
     }
+
+    /// Anything waiting for a decision (located hunks, failed hunks or line edits).
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty() || !self.edits.is_empty()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.previous.is_some()
+    }
+
+    pub fn undo_depth(&self) -> usize {
+        usize::from(self.previous.is_some())
+    }
+}
+
+/// Find `search` in `lines`: exact (ignoring trailing spaces) first, then ignoring
+/// indentation. Returns (first line, number of lines). Errors when absent or ambiguous.
+fn locate(lines: &[String], search: &str) -> Result<(usize, usize), String> {
+    fn end(s: &str) -> &str {
+        s.trim_end()
+    }
+    fn both(s: &str) -> &str {
+        s.trim()
+    }
+
+    let needle: Vec<&str> = search.lines().collect();
+    if needle.is_empty() || needle.iter().all(|l| l.trim().is_empty()) {
+        return Err("empty search block".into());
+    }
+    if needle.len() > lines.len() {
+        return Err("search block is longer than the file".into());
+    }
+
+    let find = |norm: fn(&str) -> &str| -> Vec<usize> {
+        (0..=lines.len() - needle.len())
+            .filter(|&i| {
+                needle
+                    .iter()
+                    .enumerate()
+                    .all(|(k, n)| norm(&lines[i + k]) == norm(n))
+            })
+            .collect()
+    };
+
+    let mut hits = find(end);
+    if hits.is_empty() {
+        hits = find(both);
+    }
+    match hits.as_slice() {
+        [] => Err("search block not found".into()),
+        [start] => Ok((*start, needle.len())),
+        _ => Err("search block matches more than once".into()),
+    }
 }
 
 fn display_len(line: &str) -> usize {
@@ -554,138 +618,70 @@ pub fn display(line: &str) -> String {
         expanded
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn doc(text: &str) -> (CodeDoc, PathBuf) {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static N: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "virgo-code-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("f.txt"), text).unwrap();
-        (CodeDoc::open(&dir, "f.txt").unwrap(), dir)
-    }
-
-    fn disk(dir: &Path) -> String {
-        fs::read_to_string(dir.join("f.txt")).unwrap()
+    fn doc(name: &str, text: &str) -> (PathBuf, CodeDoc) {
+        let root = std::env::temp_dir().join(format!("virgo-code-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("f.txt"), text).unwrap();
+        let d = CodeDoc::open(&root, "f.txt").unwrap();
+        (root, d)
     }
 
     #[test]
-    fn restaging_a_key_replaces_the_previous_version() {
-        let (mut d, _) = doc("a\nb\nc\n");
-        d.stage_keyed(Some((0, 0)), "b", "B", true).unwrap();
-        d.stage_keyed(Some((0, 0)), "b", "B\nB2", true).unwrap();
-        assert_eq!(d.groups.len(), 1);
-        assert_eq!(d.edits[&1], vec!["B".to_string(), "B2".to_string()]);
-        assert!(d.groups[0].typing);
-    }
-
-    #[test]
-    fn accept_one_group_shifts_the_other() {
-        let (mut d, dir) = doc("a\nb\nc\nd\n");
-        d.stage_keyed(Some((0, 0)), "a", "a1\na2\na3", false).unwrap();
-        d.stage_keyed(Some((0, 1)), "c", "C", false).unwrap();
-        assert_eq!(d.accept_group(0).unwrap(), Some((0, 0)));
-        assert_eq!(disk(&dir), "a1\na2\na3\nb\nc\nd\n");
-        // the second change moved down by two lines
-        assert_eq!(d.groups[0].first, 4);
-        assert_eq!(d.edits[&4], vec!["C".to_string()]);
-        assert_eq!(d.accept_group(0).unwrap(), Some((0, 1)));
-        assert_eq!(disk(&dir), "a1\na2\na3\nb\nC\nd\n");
-    }
-
-    #[test]
-    fn reject_leaves_the_file_alone() {
-        let (mut d, dir) = doc("a\nb\n");
-        d.stage_keyed(None, "a", "x", false).unwrap();
-        d.reject_group(0);
-        assert!(!d.has_pending());
-        assert_eq!(disk(&dir), "a\nb\n");
-    }
-
-    #[test]
-    fn undo_goes_back_several_levels() {
-        let (mut d, dir) = doc("a\nb\nc\n");
-        d.stage_keyed(Some((0, 0)), "a", "A", false).unwrap();
-        d.accept_group(0).unwrap();
-        d.stage_keyed(Some((0, 1)), "c", "C", false).unwrap();
-        d.accept_group(0).unwrap();
-        assert_eq!(disk(&dir), "A\nb\nC\n");
-        assert_eq!(d.undo_depth(), 2);
-        assert_eq!(d.undo_apply().unwrap(), vec![(0, 1)]);
-        assert_eq!(disk(&dir), "A\nb\nc\n");
-        assert_eq!(d.undo_apply().unwrap(), vec![(0, 0)]);
-        assert_eq!(disk(&dir), "a\nb\nc\n");
-        assert!(d.undo_apply().is_err());
-    }
-
-    #[test]
-    fn typing_group_cannot_be_accepted_and_survives_apply_all() {
-        let (mut d, dir) = doc("a\nb\nc\n");
-        d.stage_keyed(Some((0, 0)), "a", "A", false).unwrap();
-        d.stage_keyed(Some((0, 1)), "c", "C\nmore", true).unwrap();
-        assert!(d.accept_group(1).is_err());
-        assert_eq!(d.apply().unwrap(), 1);
-        assert_eq!(disk(&dir), "A\nb\nc\n");
-        assert_eq!(d.groups.len(), 1);
-        assert!(d.groups[0].typing);
-        assert_eq!(d.groups[0].first, 2);
-    }
-
-    #[test]
-    fn overlapping_change_is_refused() {
-        let (mut d, _) = doc("a\nb\nc\n");
-        d.stage_keyed(Some((0, 0)), "a\nb", "x", false).unwrap();
-        assert!(d.stage_keyed(Some((0, 1)), "b\nc", "y", false).is_err());
-    }
-
-    #[test]
-    fn accept_refuses_when_the_file_changed_on_disk() {
-        let (mut d, dir) = doc("a\nb\n");
-        d.stage_keyed(None, "a", "A", false).unwrap();
-        fs::write(dir.join("f.txt"), "edited elsewhere\n").unwrap();
-        assert!(d.accept_group(0).is_err());
-        assert_eq!(disk(&dir), "edited elsewhere\n");
-    }
-
-    #[test]
-    fn deleting_lines_and_clearing_a_line_rejects_the_group() {
-        let (mut d, dir) = doc("a\nb\nc\n");
-        d.stage_keyed(None, "a\nb", "", false).unwrap();
-        d.clear_edit(1);
-        assert!(!d.has_pending());
-        d.stage_keyed(None, "a\nb", "", false).unwrap();
-        d.accept_group(0).unwrap();
-        assert_eq!(disk(&dir), "c\n");
-    }
-}
-
-#[cfg(test)]
-mod more_tests {
-    use super::*;
-
-    #[test]
-    fn drop_typing_and_detach_keys() {
-        let dir = std::env::temp_dir().join(format!("virgo-code-more-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("f.txt"), "a\nb\nc\n").unwrap();
-        let mut d = CodeDoc::open(&dir, "f.txt").unwrap();
-        d.stage_keyed(Some((0, 0)), "a", "A", false).unwrap();
-        d.stage_keyed(Some((0, 1)), "c", "C", true).unwrap();
+    fn accepting_one_hunk_relocates_the_others() {
+        let (root, mut d) = doc("accept", "a\nb\nc\nd\n");
+        let h1 = d.add_pending("b".into(), "B1\nB2".into());
+        let h2 = d.add_pending("d".into(), "D".into());
         assert_eq!(d.change_count(), 2);
-        d.drop_typing();
+
+        d.accept(h1).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("f.txt")).unwrap(),
+            "a\nB1\nB2\nc\nd\n"
+        );
+        assert_eq!(d.change_count(), 1); // "d" is now on line 5 (index 4)
+        assert!(d.edits.contains_key(&4));
+
+        d.accept(h2).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("f.txt")).unwrap(),
+            "a\nB1\nB2\nc\nD\n"
+        );
+        assert!(!d.has_edits());
+    }
+
+    #[test]
+    fn undo_brings_the_hunk_back_as_pending() {
+        let (root, mut d) = doc("undo", "a\nb\nc\n");
+        let h = d.add_pending("b".into(), "B".into());
+        d.accept(h).unwrap();
+        d.undo_apply().unwrap();
+        assert_eq!(fs::read_to_string(root.join("f.txt")).unwrap(), "a\nb\nc\n");
         assert_eq!(d.change_count(), 1);
-        d.detach_keys();
-        assert_eq!(d.groups[0].key, None);
-        // a fresh stage with the old key no longer replaces the detached change
-        d.stage_keyed(Some((0, 0)), "b", "B", false).unwrap();
-        assert_eq!(d.groups.len(), 2);
+    }
+
+    #[test]
+    fn reject_leaves_the_file_alone_and_unlocatable_hunks_report_why() {
+        let (root, mut d) = doc("reject", "a\nb\n");
+        let h = d.add_pending("b".into(), "B".into());
+        d.add_pending("zzz".into(), "x".into());
+        assert_eq!(d.failed_hunks(), 1);
+        d.reject(h);
+        assert_eq!(fs::read_to_string(root.join("f.txt")).unwrap(), "a\nb\n");
+        assert_eq!(d.change_count(), 0);
+    }
+
+    #[test]
+    fn live_hunk_is_shown_but_never_written() {
+        let (root, mut d) = doc("live", "a\nb\nc\n");
+        d.set_live("b", "B and more", true);
+        assert!(d.is_live() && d.live_span().is_some());
+        assert_eq!(d.apply().unwrap(), 0);
+        assert_eq!(fs::read_to_string(root.join("f.txt")).unwrap(), "a\nb\nc\n");
     }
 }

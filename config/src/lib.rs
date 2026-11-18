@@ -53,7 +53,7 @@ impl Default for Config {
             use_planner: true,
             planner_think: true,
             executor_think: false,
-            auto_apply: true,
+            auto_apply: false,
             live_edit: true,
             last_project: String::new(),
             active_workspace: String::new(),

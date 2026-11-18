@@ -2,7 +2,7 @@
 //! them to disk with verification, and undoing them.
 
 mod live;
-pub use live::{LiveEdit, LiveHunk, live_edits};
+pub use live::{HunkState, LiveEdit, LiveHunk, live_edits, parse_live};
 
 use std::fs;
 use std::io::Write;

@@ -31,6 +31,9 @@ pub fn view<'a>(
         let status = app.action_status.get(&(msg_idx, i));
         match action {
             Action::Edit { path, hunks } => {
+                if app.live_handles(msg_idx, path) {
+                    continue; // shown live in the code panel
+                }
                 if !matches!(status, Some(ActionStatus::Applied(_))) {
                     unapplied += 1;
                 }

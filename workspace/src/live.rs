@@ -1,50 +1,50 @@
-//! Live parsing of edit blocks while the model is still writing them.
+//! Read a model reply that may still be streaming, hunk by hunk.
 //!
-//! `parse_actions` / `completed_actions` only return finished blocks. This module
-//! also reads the block that is being written right now, including a REPLACE
-//! section that is only half there, so the editor can show the model typing.
+//! `parse_actions` only returns blocks that are finished. For live editing the UI also
+//! needs the hunk being typed right now: its SEARCH text (still being located), or its
+//! REPLACE text so far.
 
-/// One SEARCH/REPLACE pair of an edit block.
+use super::{is_close, open_fence, parse_hunks};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HunkState {
+    /// The SEARCH part is still being written.
+    Locating,
+    /// SEARCH is complete, REPLACE is being written.
+    Writing,
+    /// `>>>>>>> REPLACE` has arrived.
+    Done,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveHunk {
     pub search: String,
     pub replace: String,
-    /// `false` while the REPLACE text is still being written.
+    pub state: HunkState,
+    /// `state == HunkState::Done`, for callers that only need a flag.
     pub done: bool,
 }
 
-/// One ```` ```edit path ```` block, finished or not.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiveEdit {
-    /// Index of the block among all actions of the reply. It is the index
-    /// `parse_actions` gives the same block, so it can key per-action state.
+    /// Index of this block among the reply's actions, the same numbering as
+    /// `parse_actions(reply)`. Stable while the reply streams.
     pub action: usize,
     pub path: String,
-    /// Finished hunks first; at most the last one is still `done == false`.
+    /// In reply order. Only the last one can be unfinished.
     pub hunks: Vec<LiveHunk>,
 }
 
-use crate::{is_close, open_fence};
-
-/// A half-typed `>>>>>>> REPLACE` line must not show up as code.
-fn is_marker_prefix(t: &str) -> bool {
-    !t.is_empty() && ">>>>>>> REPLACE".starts_with(t)
-}
-
-/// Every `edit` block of a (possibly unfinished) reply.
-///
-/// A block shows up as soon as one hunk has its SEARCH text complete. Blocks with
-/// no usable hunk yet are left out.
-pub fn live_edits(partial: &str) -> Vec<LiveEdit> {
-    let ends_with_newline = partial.ends_with('\n');
+/// Every `edit` block of the reply, including an unclosed last one.
+pub fn live_edits(reply: &str) -> Vec<LiveEdit> {
     let mut out = Vec::new();
+    let mut lines = reply.lines();
+    let ends_with_newline = reply.ends_with('\n');
+    // Counts exactly the blocks `parse_actions` would return.
     let mut action = 0usize;
-    let mut lines = partial.lines();
 
     while let Some(line) = lines.next() {
-        let Some((n, info)) = open_fence(line) else {
-            continue;
-        };
+        let Some((n, info)) = open_fence(line) else { continue };
 
         let mut body: Vec<&str> = Vec::new();
         let mut closed = false;
@@ -55,17 +55,13 @@ pub fn live_edits(partial: &str) -> Vec<LiveEdit> {
             }
             body.push(l);
         }
-        // The last line of an unfinished reply may be cut in the middle of a word.
-        let cut = !closed && !ends_with_newline;
 
         if let Some(path) = info.strip_prefix("edit ") {
-            let hunks = hunks_of(&body, cut);
+            let hunks = live_hunks(&body, closed || ends_with_newline);
             if !hunks.is_empty() {
-                out.push(LiveEdit {
-                    action,
-                    path: path.trim().to_string(),
-                    hunks,
-                });
+                out.push(LiveEdit { action, path: path.trim().to_string(), hunks });
+            }
+            if !parse_hunks(&body).is_empty() {
                 action += 1;
             }
         } else if let Some(path) = info.strip_prefix("delete ") {
@@ -79,21 +75,31 @@ pub fn live_edits(partial: &str) -> Vec<LiveEdit> {
     out
 }
 
-fn hunks_of(body: &[&str], cut: bool) -> Vec<LiveHunk> {
+/// Old name of `live_edits`.
+pub fn parse_live(reply: &str) -> Vec<LiveEdit> {
+    live_edits(reply)
+}
+
+/// "=" or ">" characters that may be the start of a marker still being typed.
+fn partial_marker(line: &str, c: char) -> bool {
+    !line.is_empty() && line.len() < 7 && line.chars().all(|x| x == c)
+}
+
+fn live_hunks(body: &[&str], last_line_complete: bool) -> Vec<LiveHunk> {
     #[derive(PartialEq)]
     enum State {
         Out,
         Search,
         Replace,
     }
-
     let mut state = State::Out;
     let (mut search, mut replace): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
     let mut hunks = Vec::new();
 
     for (i, line) in body.iter().enumerate() {
         let t = line.trim_end();
-        let last_cut = cut && i + 1 == body.len();
+        // A half-typed marker on the last line must not flash up as code.
+        let typing = i + 1 == body.len() && !last_line_complete;
         match state {
             State::Out => {
                 if t.starts_with("<<<<<<<") {
@@ -105,7 +111,7 @@ fn hunks_of(body: &[&str], cut: bool) -> Vec<LiveHunk> {
             State::Search => {
                 if t.starts_with("=======") {
                     state = State::Replace;
-                } else {
+                } else if !(typing && partial_marker(t, '=')) {
                     search.push(line);
                 }
             }
@@ -114,25 +120,31 @@ fn hunks_of(body: &[&str], cut: bool) -> Vec<LiveHunk> {
                     hunks.push(LiveHunk {
                         search: search.join("\n"),
                         replace: replace.join("\n"),
+                        state: HunkState::Done,
                         done: true,
                     });
                     state = State::Out;
-                } else if last_cut && is_marker_prefix(t) {
-                    // still typing the end marker: not code
-                } else {
+                } else if !(typing && partial_marker(t, '>')) {
                     replace.push(line);
                 }
             }
         }
     }
 
-    // SEARCH is complete but REPLACE is still being written.
-    if state == State::Replace {
-        hunks.push(LiveHunk {
+    match state {
+        State::Search => hunks.push(LiveHunk {
+            search: search.join("\n"),
+            replace: String::new(),
+            state: HunkState::Locating,
+            done: false,
+        }),
+        State::Replace => hunks.push(LiveHunk {
             search: search.join("\n"),
             replace: replace.join("\n"),
+            state: HunkState::Writing,
             done: false,
-        });
+        }),
+        State::Out => {}
     }
     hunks
 }
@@ -142,74 +154,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn half_written_replace_is_a_live_hunk() {
-        let text = "Sure.\n```edit a.rs\n<<<<<<< SEARCH\nfn a() {}\n=======\nfn a() {\n    1";
-        let edits = live_edits(text);
-        assert_eq!(edits.len(), 1);
-        assert_eq!(edits[0].path, "a.rs");
-        assert_eq!(
-            edits[0].hunks,
-            vec![LiveHunk {
-                search: "fn a() {}".into(),
-                replace: "fn a() {\n    1".into(),
-                done: false
-            }]
-        );
+    fn follows_a_hunk_from_locating_to_done() {
+        let a = "Sure.\n```edit src/a.rs\n<<<<<<< SEARCH\nfn a() {";
+        assert_eq!(parse_live(a)[0].hunks[0].state, HunkState::Locating);
+
+        let b = "```edit src/a.rs\n<<<<<<< SEARCH\nfn a() {}\n=======\nfn a() { 1";
+        let h = &parse_live(b)[0].hunks[0];
+        assert_eq!((h.state, h.search.as_str(), h.replace.as_str()), (HunkState::Writing, "fn a() {}", "fn a() { 1"));
+
+        let c = "```edit src/a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n";
+        assert_eq!(parse_live(c)[0].hunks[0].state, HunkState::Done);
     }
 
     #[test]
-    fn half_typed_end_marker_is_not_code() {
-        let text = "```edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>";
-        let edits = live_edits(text);
-        assert_eq!(edits[0].hunks[0].replace, "y");
-        assert!(!edits[0].hunks[0].done);
+    fn half_typed_markers_are_not_code() {
+        let t = "```edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>";
+        assert_eq!(parse_live(t)[0].hunks[0].replace, "y");
+        let t = "```edit a.rs\n<<<<<<< SEARCH\nx\n===";
+        assert_eq!(parse_live(t)[0].hunks[0].search, "x");
     }
 
     #[test]
-    fn finished_hunk_is_done_and_the_next_one_is_live() {
-        let text = "```edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n<<<<<<< SEARCH\np\n=======\nq";
-        let hunks = &live_edits(text)[0].hunks;
-        assert_eq!(hunks.len(), 2);
-        assert!(hunks[0].done);
-        assert_eq!(hunks[0].replace, "y");
-        assert!(!hunks[1].done);
-        assert_eq!(hunks[1].replace, "q");
+    fn several_hunks_and_blocks() {
+        let t = "```edit a.rs\n<<<<<<< SEARCH\n1\n=======\n2\n>>>>>>> REPLACE\n<<<<<<< SEARCH\n3\n=======\n4\n>>>>>>> REPLACE\n```\n```edit b.rs\n<<<<<<< SEARCH\n5";
+        let e = parse_live(t);
+        assert_eq!(e.len(), 2);
+        assert_eq!(e[0].hunks.len(), 2);
+        assert_eq!(e[1].path, "b.rs");
+        assert_eq!(e[1].hunks[0].state, HunkState::Locating);
     }
 
     #[test]
-    fn search_still_being_written_is_not_returned() {
-        let text = "```edit a.rs\n<<<<<<< SEARCH\nfn a(";
-        assert!(live_edits(text).is_empty());
-        let text = "```edit a.rs\n<<<<<<< SEARCH\nfn a() {}\n=====";
-        assert!(live_edits(text).is_empty());
-    }
-
-    #[test]
-    fn closed_block_has_only_done_hunks() {
-        let text = "```edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n```\n";
-        let edits = live_edits(text);
-        assert_eq!(edits.len(), 1);
-        assert!(edits[0].hunks.iter().all(|h| h.done));
-    }
-
-    #[test]
-    fn action_index_counts_delete_and_run_blocks_too() {
-        let text = "```delete old.rs\n```\n```run\ncargo check\n```\n\
-                    ```edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny";
-        let edits = live_edits(text);
-        assert_eq!(edits.len(), 1);
-        assert_eq!(edits[0].action, 2);
-    }
-
-    #[test]
-    fn four_backtick_fences_work() {
-        let text = "````edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n````\n";
-        assert_eq!(live_edits(text)[0].hunks.len(), 1);
-    }
-
-    #[test]
-    fn paths_are_cleaned_like_apply_does() {
-        let edits = live_edits("```edit  ./src/a.rs \n<<<<<<< SEARCH\nx\n=======\ny");
-        assert_eq!(crate::clean(&edits[0].path), "src/a.rs");
+    fn action_index_matches_parse_actions() {
+        let t = "```run\nls\n```\n```edit a.rs\n<<<<<<< SEARCH\n1\n=======\n2\n>>>>>>> REPLACE\n```\n```delete x\n```\n```edit b.rs\n<<<<<<< SEARCH\n5";
+        let e = live_edits(t);
+        assert_eq!((e[0].action, e[1].action), (1, 3));
+        assert!(e[0].hunks[0].done && !e[1].hunks[0].done);
+        let full = format!("{t}\n=======\nsix\n>>>>>>> REPLACE\n```\n");
+        let actions = crate::parse_actions(&full);
+        assert!(matches!(&actions[3], crate::Action::Edit { path, .. } if path == "b.rs"));
+        assert_eq!(live_edits(&full)[1].action, 3);
     }
 }

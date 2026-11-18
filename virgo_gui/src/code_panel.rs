@@ -1,5 +1,5 @@
 //! Middle panel: the open file with a suggestion button on every line.
-//! AI changes show as red (original) and green (new) rows until applied.
+//! AI changes show as red (original) and green (new) rows until accepted or rejected.
 //!
 //! Only the rows near the scroll position are built, so big files stay fast.
 
@@ -65,12 +65,12 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
 
     // ---- review toolbar ----
     let pending = doc.change_count();
-    let ready = doc.ready_groups();
-    let typing = doc.groups.iter().any(|g| g.typing);
-    let summary: Element<'a, Message> = if typing {
-        text(format!("Virgo is writing... {pending} change(s)"))
+    let live = doc.is_live();
+
+    let summary: Element<'a, Message> = if live {
+        text("AI is editing this file...")
             .size(12)
-            .style(style::success)
+            .style(style::accent)
             .into()
     } else if pending == 0 {
         text("Click the bulb on a line to ask the model for a change.")
@@ -79,22 +79,29 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
             .into()
     } else {
         text(format!(
-            "{pending} change(s) to review: use the check / x on each change"
+            "{pending} AI change(s) pending. Accept or reject each one."
         ))
         .size(12)
         .style(style::success)
         .into()
     };
 
+    let stop: Element<'a, Message> = if app.is_working() && live {
+        button(text("Stop").size(12))
+            .padding([6, 10])
+            .on_press(Message::Stop)
+            .style(style::ghost_button)
+            .into()
+    } else {
+        Space::with_width(Length::Shrink).into()
+    };
+
     let toolbar = row![
         container(summary).width(Length::Fill),
+        stop,
         button(icon_manager::label(
             icon_manager::undo_2(),
-            if doc.undo_depth() > 1 {
-                format!("Undo ({})", doc.undo_depth())
-            } else {
-                "Undo".to_string()
-            },
+            "Undo",
             12,
             icon_manager::muted()
         ))
@@ -107,12 +114,12 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
             .style(style::ghost_button),
         button(icon_manager::label(
             icon_manager::check(),
-            format!("Accept all ({ready})"),
+            format!("Accept all ({pending})"),
             13,
             icon_manager::on_primary()
         ))
         .padding([7, 14])
-        .on_press_maybe((ready > 0).then_some(Message::ApplyEdits))
+        .on_press_maybe((pending > 0 && !live).then_some(Message::ApplyEdits))
         .style(style::primary_button),
     ]
     .spacing(6)
@@ -187,8 +194,37 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
     .font(Font::MONOSPACE)
     .width(Length::Fixed(MARKER_W));
 
-    // Suggest (bulb) on every line; revert on lines that have a pending change.
-    let actions: Element<'a, Message> = if r.show_actions {
+    let actions: Element<'a, Message> = if let (Some(h), RowKind::Removed) = (r.hunk, kind) {
+        // First row of a model change: accept / reject the whole hunk.
+        if h == code::LIVE_ID {
+            // The model is still typing it.
+            container(text("...").size(12).style(style::dim))
+                .width(Length::Fixed(ACTIONS_W))
+                .into()
+        } else {
+            container(row![
+                button(icon_manager::tint(
+                    icon_manager::check(),
+                    13.0,
+                    style::palette().success
+                ))
+                .padding([5, 6])
+                .on_press(Message::AcceptHunk(h))
+                .style(style::ghost_button),
+                button(icon_manager::tint(
+                    icon_manager::x(),
+                    13.0,
+                    icon_manager::muted()
+                ))
+                .padding([5, 6])
+                .on_press(Message::RejectHunk(h))
+                .style(style::ghost_button),
+            ])
+            .width(Length::Fixed(ACTIONS_W))
+            .into()
+        }
+    } else if r.show_actions {
+        // Suggest (bulb) on every line; revert on lines with a single-line suggestion.
         let bulb_color = if selected {
             icon_manager::accent()
         } else {
@@ -204,57 +240,17 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
             .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
             .style(style::ghost_button)
         ];
-        match (kind, r.hunk) {
-            // First row of a change: accept or reject the whole change.
-            (RowKind::Removed, Some(group)) if !r.typing => {
-                buttons = buttons
-                    .push(
-                        button(icon_manager::tint(
-                            icon_manager::check(),
-                            13.0,
-                            icon_manager::accent(),
-                        ))
-                        .padding([5, 6])
-                        .on_press(Message::AcceptHunk(group))
-                        .style(style::ghost_button),
-                    )
-                    .push(
-                        button(icon_manager::tint(
-                            icon_manager::x(),
-                            13.0,
-                            icon_manager::muted(),
-                        ))
-                        .padding([5, 6])
-                        .on_press(Message::RejectHunk(group))
-                        .style(style::ghost_button),
-                    );
-            }
-            // Still being written: it can be rejected but not accepted yet.
-            (RowKind::Removed, Some(group)) => {
-                buttons = buttons.push(
-                    button(icon_manager::tint(
-                        icon_manager::x(),
-                        13.0,
-                        icon_manager::muted(),
-                    ))
-                    .padding([5, 6])
-                    .on_press(Message::RejectHunk(group))
-                    .style(style::ghost_button),
-                );
-            }
-            (RowKind::Removed, None) => {
-                buttons = buttons.push(
-                    button(icon_manager::tint(
-                        icon_manager::undo_2(),
-                        13.0,
-                        icon_manager::muted(),
-                    ))
-                    .padding([5, 6])
-                    .on_press(Message::RevertLine(r.line))
-                    .style(style::ghost_button),
-                );
-            }
-            _ => {}
+        if kind == RowKind::Removed {
+            buttons = buttons.push(
+                button(icon_manager::tint(
+                    icon_manager::undo_2(),
+                    13.0,
+                    icon_manager::muted(),
+                ))
+                .padding([5, 6])
+                .on_press(Message::RevertLine(r.line))
+                .style(style::ghost_button),
+            );
         }
         container(buttons).width(Length::Fixed(ACTIONS_W)).into()
     } else {

@@ -115,24 +115,62 @@ fn edit_card<'a>(
                     .style(style::ghost_button),
                 );
         }
-        // Live review: the decision happens in the code panel, hunk by hunk.
+        // Live review: Apply / Revert per file, hunk-by-hunk review in the code panel.
         None if app.live_card(msg_idx, i, hunks.len()).is_some() => {
             let (accepted, rejected, open) =
                 app.live_card(msg_idx, i, hunks.len()).unwrap_or((0, 0, 0));
+            let writing = app.is_working();
+
             let label = if open == 0 {
-                format!("{accepted} accepted, {rejected} rejected")
-            } else if app.is_working() {
+                format!("{accepted} applied, {rejected} reverted")
+            } else if writing {
                 "Writing live...".to_string()
             } else {
                 format!("{open} to review")
             };
             header = header.push(text(label).size(12).style(style::success));
+
             if open > 0 {
-                header = header.push(
-                    button(text("Open").size(12))
+                header = header
+                    .push(
+                        button(text("Open").size(12))
+                            .padding([5, 10])
+                            .on_press(Message::OpenFile(path.to_string()))
+                            .style(style::ghost_button),
+                    )
+                    .push(
+                        button(icon_manager::label(
+                            icon_manager::check(),
+                            "Apply",
+                            12,
+                            icon_manager::on_primary(),
+                        ))
+                        .padding([5, 12])
+                        .on_press_maybe((!writing).then(|| Message::ApplyFile(path.to_string())))
+                        .style(style::primary_button),
+                    )
+                    .push(
+                        button(icon_manager::label(
+                            icon_manager::undo_2(),
+                            "Revert",
+                            12,
+                            icon_manager::muted(),
+                        ))
                         .padding([5, 10])
-                        .on_press(Message::OpenFile(path.to_string()))
+                        .on_press_maybe((!writing).then(|| Message::RejectFile(path.to_string())))
                         .style(style::ghost_button),
+                    );
+            } else if accepted > 0 && app.can_revert_file(path) {
+                header = header.push(
+                    button(icon_manager::label(
+                        icon_manager::undo_2(),
+                        "Revert",
+                        12,
+                        icon_manager::muted(),
+                    ))
+                    .padding([5, 10])
+                    .on_press(Message::RevertFile(path.to_string()))
+                    .style(style::ghost_button),
                 );
             }
         }

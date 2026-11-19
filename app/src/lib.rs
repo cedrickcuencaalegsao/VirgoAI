@@ -132,6 +132,10 @@ pub enum Message {
     CancelSuggest,
     AcceptHunk(u32),
     RejectHunk(u32),
+    /// Chat-card buttons for one edited file (path as written in the edit block).
+    ApplyFile(String),
+    RejectFile(String),
+    RevertFile(String),
     /// (file, line, model reply or error)
     SuggestionReady(String, usize, Result<String, String>),
     RevertLine(usize),
@@ -697,28 +701,28 @@ impl App {
             }
             Message::DiscardEdits => {
                 self.reject_file();
-                Task::none()
+                self.after_review_decision()
             }
             Message::ApplyEdits => {
                 self.accept_file();
-                Task::none()
+                self.after_review_decision()
             }
             Message::UndoApply => self.undo_accept(),
-            Message::AcceptHunk(id) => {
-                self.accept_hunk(id);
-                Task::none()
+            Message::AcceptHunk(index) => {
+                self.accept_hunk(index);
+                self.after_review_decision()
             }
-            Message::RejectHunk(id) => {
-                self.reject_hunk(id);
-                Task::none()
+            Message::RejectHunk(index) => {
+                self.reject_hunk(index);
+                self.after_review_decision()
             }
             Message::AcceptAllFiles => {
                 self.accept_everything();
-                Task::none()
+                self.after_review_decision()
             }
             Message::RejectAllFiles => {
                 self.reject_everything();
-                Task::none()
+                self.after_review_decision()
             }
             Message::ToggleLiveEdit(v) => {
                 self.cfg.live_edit = v;
@@ -1108,6 +1112,18 @@ impl App {
                         self.update(Message::ToggleEditMode(next))
                     }
                 }
+            }
+            Message::ApplyFile(rel) => {
+                self.apply_file(rel);
+                self.after_review_decision()
+            }
+            Message::RejectFile(rel) => {
+                self.reject_file_named(rel);
+                self.after_review_decision()
+            }
+            Message::RevertFile(rel) => {
+                self.revert_file(rel);
+                Task::none()
             }
         }
     }

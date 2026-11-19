@@ -220,7 +220,6 @@ impl App {
         let task = run.task.clone();
         let instructions = run.instructions.clone();
         let done = run.done_lines();
-        let tries = run.tries;
         let retry_error = run.last_error.take();
 
         // Read the step's file NOW: earlier steps may have changed it.
@@ -267,19 +266,9 @@ impl App {
         self.streamed_actions = 0;
         self.messages
             .push(ChatMessage::new(Role::Assistant, String::new()));
+        // Enable live review for this step's reply.
+        self.begin_live(self.messages.len() - 1);
         self.begin_stage(Phase::Executing);
-        self.status = format!(
-            "Step {}/{}: {} with {}{}",
-            step.id,
-            total,
-            step.file,
-            self.cfg.executor_model,
-            if tries > 0 {
-                format!(" (retry {tries})")
-            } else {
-                String::new()
-            }
-        );
         self.spawn_stream(request)
     }
 
@@ -288,11 +277,53 @@ impl App {
         self.phase = Phase::Idle;
         let msg_idx = self.messages.len().saturating_sub(1);
 
-        // A plan run is an approved plan, so edits are applied even when auto-apply is off.
-        // Blocks already applied while streaming are skipped by `apply_edits`.
         if let Err(e) = self.edit_root() {
             return self.step_failed(e, false); // retrying cannot fix this
         }
+
+        // ---- live review: stage the edits, then wait for Accept / Reject ----
+        if self.live_wanted(msg_idx) {
+            self.apply_streamed(true); // new files (and deletes with auto-apply)
+            let _ = self.restage(msg_idx, false);
+            self.drop_live_typing();
+
+            let (ok, bad) = self.edit_counts(msg_idx);
+            if bad > 0 {
+                let errors = self.step_errors(msg_idx);
+                self.reject_everything(); // retry starts from the file's real contents
+                return self.step_failed(errors, true);
+            }
+
+            let files = self.review_files();
+            if !files.is_empty() {
+                let total: usize = files.iter().map(|(_, n)| n).sum();
+                let first = files[0].0.clone();
+                if self.code.as_ref().map_or(true, |d| !d.has_pending()) {
+                    self.show_file(&first);
+                }
+                self.status = format!(
+                    "Step ready: {total} change(s) in {} file(s). Accept or reject them in the \
+                     code panel to continue the plan.",
+                    files.len()
+                );
+                self.save_chat();
+                return scroll_to_end();
+            }
+
+            if ok == 0 {
+                return self.step_failed(
+                    "The reply contained no edit block for this step.".into(),
+                    true,
+                );
+            }
+            if let Some(run) = self.plan_run.as_mut() {
+                run.mark_done();
+            }
+            self.save_chat();
+            return self.start_next_step();
+        }
+
+        // ---- no live review: apply straight to disk (live edit off) ----
         self.apply_edits(msg_idx, None);
 
         let (ok, bad) = self.edit_counts(msg_idx);
@@ -422,5 +453,39 @@ impl App {
         self.status = status;
         self.save_chat();
         scroll_to_end()
+    }
+    /// Called after every accept / reject. When a plan step was waiting for review
+    /// and nothing is pending any more, finish the step and start the next one.
+    pub(crate) fn after_review_decision(&mut self) -> Task<Message> {
+        let waiting =
+            self.phase == Phase::Idle && self.plan_run.as_ref().is_some_and(|r| r.cur.is_some());
+        if !waiting || !self.review_files().is_empty() {
+            return Task::none();
+        }
+
+        let msg_idx = self.live_msg.unwrap_or(0);
+        let (written, _) = self.edit_counts(msg_idx);
+        let accepted = self.live_accepted.len() + written;
+
+        if accepted > 0 {
+            if let Some(run) = self.plan_run.as_mut() {
+                run.mark_done();
+            }
+            self.save_chat();
+            self.start_next_step()
+        } else {
+            let id = self
+                .plan_run
+                .as_ref()
+                .and_then(|r| r.cur.map(|i| r.plan.steps[i].id))
+                .unwrap_or(0);
+            if let Some(run) = self.plan_run.as_mut() {
+                run.mark_failed("You rejected every change of this step.".into());
+            }
+            self.status =
+                format!("Step {id}: all changes rejected. Use Retry or Skip in the plan panel.");
+            self.save_chat();
+            scroll_to_end()
+        }
     }
 }

@@ -24,18 +24,8 @@ impl App {
     /// Reviewing is on for this reply: live edits are enabled, a folder is open and
     /// the reply is not a step of an already approved plan.
     pub(crate) fn live_wanted(&self, msg_idx: usize) -> bool {
-        self.cfg.live_edit
-            && self.project.is_some()
-            && self.live_msg == Some(msg_idx)
-            && self.plan_run.as_ref().is_none_or(|r| r.cur.is_none())
+        self.cfg.live_edit && self.project.is_some() && self.live_msg == Some(msg_idx)
     }
-
-    // fn live_streaming(&self) -> bool {
-    //     let last = self.messages.len().saturating_sub(1);
-    //     self.phase == Phase::Executing
-    //         && self.messages.get(last).is_some_and(|m| m.role == Role::Assistant)
-    //         && self.live_wanted(last)
-    // }
 
     /// A new reply starts. Earlier pending hunks stay reviewable.
     pub(crate) fn begin_live(&mut self, msg_idx: usize) {
@@ -80,11 +70,18 @@ impl App {
     }
 
     /// (accepted, rejected, still open) hunks of one edit block of the live reply.
-    pub fn live_card(&self, msg_idx: usize, action: usize, hunks: usize) -> Option<(usize, usize, usize)> {
+    pub fn live_card(
+        &self,
+        msg_idx: usize,
+        action: usize,
+        hunks: usize,
+    ) -> Option<(usize, usize, usize)> {
         if self.live_msg != Some(msg_idx) || !self.cfg.live_edit {
             return None;
         }
-        let count = |set: &HashSet<(usize, usize)>| (0..hunks).filter(|h| set.contains(&(action, *h))).count();
+        let count = |set: &HashSet<(usize, usize)>| {
+            (0..hunks).filter(|h| set.contains(&(action, *h))).count()
+        };
         let (a, r) = (count(&self.live_accepted), count(&self.live_rejected));
         Some((a, r, hunks.saturating_sub(a + r)))
     }
@@ -100,27 +97,9 @@ impl App {
         }
     }
 
-    // fn live_streaming(&self) -> bool {
-    //     let last = self.messages.len().saturating_sub(1);
-    //     self.phase == Phase::Executing
-    //         && self.messages.get(last).is_some_and(|m| m.role == Role::Assistant)
-    //         && self.live_wanted(last)
-    // }
-
-    // ---- streaming -------------------------------------------------------
-
-    /// Stage the hunks of the reply written so far. Called on every flush.
-    // pub(crate) fn sync_live(&mut self) -> Task<Message> {
-    //     if !self.live_streaming() {
-    //         return Task::none();
-    //     }
-    //     let idx = self.messages.len() - 1;
-    //     self.restage(idx, true)
-    // }
-
     /// Finished hunks become pending hunks (once). The hunk being typed is shown
     /// as live text and redrawn on every call.
-    fn restage(&mut self, msg_idx: usize, streaming: bool) -> Task<Message> {
+    pub(crate) fn restage(&mut self, msg_idx: usize, streaming: bool) -> Task<Message> {
         let Some(content) = self.messages.get(msg_idx).map(|m| m.content.clone()) else {
             return Task::none();
         };
@@ -185,7 +164,11 @@ impl App {
             }
         }
 
-        if followed { self.follow_typing() } else { Task::none() }
+        if followed {
+            self.follow_typing()
+        } else {
+            Task::none()
+        }
     }
 
     /// Keep the row being typed in view.
@@ -280,7 +263,11 @@ impl App {
                 self.show_file(&rel);
             }
         }
-        if failed > 0 { self.retry_failed(msg_idx) } else { Task::none() }
+        if failed > 0 {
+            self.retry_failed(msg_idx)
+        } else {
+            Task::none()
+        }
     }
 
     /// Stop or error while typing: the half-written hunk disappears.
@@ -422,6 +409,63 @@ impl App {
             Err(e) => self.status = e,
         }
         Task::none()
+    }
+
+    /// Mutable access to the open or parked document of `rel`.
+    fn doc_mut(&mut self, rel: &str) -> Option<&mut CodeDoc> {
+        if self.code.as_ref().is_some_and(|d| d.rel == rel) {
+            self.code.as_mut()
+        } else {
+            self.parked.get_mut(rel)
+        }
+    }
+
+    /// True when an accepted change of this file can still be undone.
+    pub fn can_revert_file(&self, rel: &str) -> bool {
+        let rel = workspace::clean(rel);
+        self.code
+            .iter()
+            .chain(self.parked.values())
+            .any(|d| d.rel == rel && d.can_undo())
+    }
+
+    /// Card button "Apply": accept every finished change of that file.
+    pub(crate) fn apply_file(&mut self, rel: String) {
+        let rel = workspace::clean(&rel).to_string();
+        if self.show_file(&rel) {
+            self.accept_file();
+        }
+    }
+
+    /// Card button "Revert" on a file with pending changes: reject them.
+    pub(crate) fn reject_file_named(&mut self, rel: String) {
+        let rel = workspace::clean(&rel).to_string();
+        if self.show_file(&rel) {
+            self.reject_file();
+        }
+    }
+
+    /// Card button "Revert" on an applied change: undo the last accept in that file.
+    pub(crate) fn revert_file(&mut self, rel: String) {
+        let rel = workspace::clean(&rel).to_string();
+        let result: Result<(), String> = match self.doc_mut(&rel) {
+            Some(doc) => doc.undo_apply().map(|_| ()),
+            None => Err(format!("{rel} is not open, nothing to revert")),
+        };
+        match result {
+            Ok(()) => {
+                // Treat what was applied as reverted so it is never staged again.
+                let applied: Vec<(usize, usize)> = self.live_accepted.drain().collect();
+                for key in applied {
+                    self.live_done.insert(key);
+                    self.live_rejected.insert(key);
+                }
+                self.status = format!("Reverted the last accepted change in {rel}");
+                self.refresh_project();
+            }
+            Err(e) => self.status = e,
+        }
+        self.tidy_after_decision();
     }
 
     /// Parked files without anything left to decide or undo are released.

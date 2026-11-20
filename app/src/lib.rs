@@ -152,6 +152,14 @@ pub enum Message {
     ModelsLoaded(client::Models),
     RememberLast,
 
+    // Code editing
+    ToggleEdit,
+    EditAction(text_editor::Action),
+    SaveCode,
+    FormatCode,
+    CodeFormatted(String, Result<formatter::Formatted, String>),
+    RevertEdit,
+
     // Memory
     ReloadNotes,
     SelectNote(String),
@@ -243,6 +251,11 @@ pub struct App {
     pub input_editor: text_editor::Content,
     pub pending: Option<Pending>,
     pub abort: Option<iced::task::Handle>,
+
+    /// File being edited as plain text in the code panel.
+    pub edit_rel: Option<String>,
+    pub edit_content: text_editor::Content,
+    pub edit_dirty: bool,
 
     /// What the last sent message asked for.
     pub intent: Intent,
@@ -381,6 +394,9 @@ impl App {
             input_editor: text_editor::Content::new(),
             pending: None,
             abort: None,
+            edit_rel: None,
+            edit_content: text_editor::Content::new(),
+            edit_dirty: false,
             intent: Intent::Answer,
             reviewing: false,
             plan_editor: text_editor::Content::new(),
@@ -655,7 +671,41 @@ impl App {
             // ---- code panel ----
             Message::OpenFile(rel) => self.open_file(rel),
             Message::CloseCode => {
-                self.close_code();
+                if self.is_editing() && self.edit_dirty {
+                    self.status = "Save or revert your edits before closing the file".into();
+                } else {
+                    self.close_code();
+                }
+                Task::none()
+            }
+            Message::ToggleEdit => {
+                self.toggle_edit();
+                Task::none()
+            }
+            Message::EditAction(action) => {
+                let changes_text = action.is_edit();
+                self.edit_content.perform(action);
+                if changes_text {
+                    self.edit_dirty = true;
+                }
+                Task::none()
+            }
+            Message::SaveCode => {
+                self.save_code();
+                Task::none()
+            }
+            Message::FormatCode => self.format_code(),
+            Message::CodeFormatted(rel, result) => {
+                self.on_formatted(rel, result);
+                Task::none()
+            }
+            Message::RevertEdit => {
+                if let Some(doc) = &self.code {
+                    self.edit_content =
+                        text_editor::Content::with_text(&doc.text().replace("\r\n", "\n"));
+                    self.edit_dirty = false;
+                    self.status = "Edits reverted".into();
+                }
                 Task::none()
             }
             Message::ReloadCode => {
@@ -1136,6 +1186,13 @@ impl App {
         if raw.is_empty() || self.is_busy() {
             return Task::none();
         }
+        if self.is_editing() {
+            if self.edit_dirty {
+                self.status = "Save or revert your edits before asking the model".into();
+                return Task::none();
+            }
+            self.edit_rel = None; // the model's changes are reviewed in the row view
+        }
         if let Some(doc) = self.code.as_mut() {
             doc.clear_flash();
         }
@@ -1535,6 +1592,10 @@ impl App {
     // ---- code panel -------------------------------------------------------
 
     fn open_file(&mut self, rel: String) -> Task<Message> {
+        if self.is_editing() && self.edit_dirty {
+            self.status = "Save or revert your edits before opening another file".into();
+            return Task::none();
+        }
         let Some(project) = &self.project else {
             return Task::none();
         };
@@ -1558,10 +1619,101 @@ impl App {
     }
 
     fn close_code(&mut self) {
+        self.edit_rel = None;
+        self.edit_dirty = false;
         self.park_open_doc();
         self.suggest_line = None;
         self.suggest_input.clear();
         self.suggesting = None;
+    }
+
+    pub fn is_editing(&self) -> bool {
+        self.code
+            .as_ref()
+            .is_some_and(|d| self.edit_rel.as_deref() == Some(d.rel.as_str()))
+    }
+
+    fn toggle_edit(&mut self) {
+        if self.is_editing() {
+            if self.edit_dirty {
+                self.status = "Save (⌘S) or revert your edits first".into();
+            } else {
+                self.edit_rel = None;
+            }
+            return;
+        }
+        if self.is_busy() {
+            self.status = "Wait for the model to finish before editing".into();
+            return;
+        }
+        let text = match &self.code {
+            Some(d) if !d.has_pending() => d.text().replace("\r\n", "\n"),
+            Some(_) => {
+                self.status = "Accept or reject the AI changes before editing".into();
+                return;
+            }
+            None => return,
+        };
+        self.edit_rel = self.code.as_ref().map(|d| d.rel.clone());
+        self.edit_content = text_editor::Content::with_text(&text);
+        self.edit_dirty = false;
+    }
+
+    fn save_code(&mut self) {
+        if !self.is_editing() {
+            return;
+        }
+        let text = self.edit_content.text();
+        let Some(doc) = self.code.as_mut() else {
+            return;
+        };
+        self.status = match doc.save_text(&text) {
+            Ok(()) => {
+                self.edit_dirty = false;
+                format!("Saved {}", doc.rel)
+            }
+            Err(e) => e,
+        };
+    }
+
+    fn format_code(&mut self) -> Task<Message> {
+        if !self.is_editing() {
+            return Task::none();
+        }
+        let (Some(doc), Some(project)) = (self.code.as_ref(), self.project.as_ref()) else {
+            return Task::none();
+        };
+        let (rel, root) = (doc.rel.clone(), project.root.clone());
+        let text = self.edit_content.text();
+        self.status = format!("Formatting {rel}...");
+        let tag = rel.clone();
+        Task::perform(formatter::format(root, rel, text), move |r| {
+            Message::CodeFormatted(tag.clone(), r)
+        })
+    }
+
+    fn on_formatted(&mut self, rel: String, result: Result<formatter::Formatted, String>) {
+        let same_file = self.code.as_ref().is_some_and(|d| d.rel == rel);
+        if !same_file || !self.is_editing() {
+            return;
+        }
+        match result {
+            Ok(f) => {
+                if f.text == self.edit_content.text() {
+                    self.status = format!("Already formatted ({})", f.tool);
+                    return;
+                }
+                let (line, _) = self.edit_content.cursor_position();
+                self.edit_content = text_editor::Content::with_text(&f.text);
+                for _ in 0..line.min(self.edit_content.line_count()) {
+                    self.edit_content
+                        .perform(text_editor::Action::Move(text_editor::Motion::Down));
+                }
+                self.edit_dirty = true;
+                self.status = format!("Formatted with {}. Press ⌘S to save.", f.tool);
+            }
+            Err(e) => self.status = format!("Format failed: {e}"),
+        }
     }
 
     /// Ask the executor model to rewrite the selected line.
@@ -2781,6 +2933,12 @@ fn shortcut(key: keyboard::Key, mods: keyboard::Modifiers) -> Option<Message> {
             Some(Message::AcceptAllFiles)
         }
         Key::Named(Named::Escape) => Some(Message::ClosePalette),
+        Key::Character(c) if mods.command() && mods.shift() && c.eq_ignore_ascii_case("f") => {
+            Some(Message::FormatCode)
+        }
+        Key::Character(c) if mods.command() && !mods.shift() && c.eq_ignore_ascii_case("s") => {
+            Some(Message::SaveCode)
+        }
         _ => None,
     }
 }

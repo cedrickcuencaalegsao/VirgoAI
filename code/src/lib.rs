@@ -48,6 +48,7 @@ pub struct RowRef<'a> {
     /// `Some(LIVE_ID)` means the model is still typing it.
     pub hunk: Option<u32>,
     pub src: &'a str,
+    pub spans: Option<&'a [syntax::Span]>,
 }
 
 /// A SEARCH/REPLACE block waiting for the user.
@@ -89,6 +90,8 @@ pub struct CodeDoc {
     max_chars: usize,
     /// Lines (0-based) that the last applied change added or rewrote. Shown green.
     flash: BTreeSet<usize>,
+    /// Syntax colors per original line (None = unknown language or file too long).
+    spans: Option<Vec<Vec<syntax::Span>>>,
 }
 
 impl CodeDoc {
@@ -125,8 +128,10 @@ impl CodeDoc {
             original_text: text,
             max_chars: 0,
             flash: BTreeSet::new(),
+            spans: None,
         };
         doc.recompute_width();
+        doc.rehighlight();
         doc
     }
 
@@ -472,6 +477,7 @@ impl CodeDoc {
                     show_actions: true,
                     hunk: None,
                     src: line.as_str(),
+                    spans: None,
                 }),
                 Some(replacement) => {
                     let info = owner.get(&index).copied();
@@ -482,6 +488,7 @@ impl CodeDoc {
                         show_actions: info.map_or(true, |(_, first)| first),
                         hunk: info.and_then(|(id, first)| first.then_some(id)),
                         src: line.as_str(),
+                        spans: self.spans_for(index),
                     });
                     for new_line in replacement {
                         out.push(RowRef {
@@ -491,12 +498,43 @@ impl CodeDoc {
                             show_actions: false,
                             hunk: None,
                             src: new_line.as_str(),
+                            spans: None,
                         });
                     }
                 }
             }
         }
         out
+    }
+
+    fn rehighlight(&mut self) {
+        self.spans = syntax::highlight(&self.rel, &self.original_text);
+    }
+
+    fn spans_for(&self, line: usize) -> Option<&[syntax::Span]> {
+        self.spans.as_ref()?.get(line).map(Vec::as_slice)
+    }
+
+    /// Write text typed in the editor. Same safety rule as `apply`: refuses if the
+    /// file changed on disk. The previous content is kept so `undo_apply` works.
+    pub fn save_text(&mut self, text: &str) -> Result<(), String> {
+        self.ensure_unchanged_on_disk()?;
+        let lines: Vec<String> = text.lines().map(String::from).collect();
+        self.trailing_newline = true; // the editor always ends the text with a newline
+        let new_text = self.join(&lines);
+        if new_text == self.original_text {
+            return Ok(());
+        }
+        fs::write(&self.path, &new_text)
+            .map_err(|e| format!("Could not write {}: {e}", self.rel))?;
+        self.previous = Some(std::mem::replace(&mut self.original_text, new_text));
+        self.previous_hunks.clear();
+        self.lines = lines;
+        self.edits.clear();
+        self.groups.clear();
+        self.recompute_width();
+        self.rehighlight();
+        Ok(())
     }
 
     /// Width of the code column, so long lines scroll sideways instead of wrapping.

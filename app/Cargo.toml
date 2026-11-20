@@ -19,3 +19,4 @@ project = { path = "../project" }
 workspaces = { path = "../workspaces" }
 style = { path = "../style" }
 shared = { path = "../shared" }
+formatter = { path = "../formatter" }

@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use iced::alignment::Vertical;
-use iced::widget::{row, svg, text, Svg};
+use iced::widget::{Svg, row, svg, text};
 use iced::{Color, Element, Length, Theme};
 
 use style;
@@ -47,14 +47,20 @@ pub fn label<'a, Message: 'a>(
     size: u16,
     color: Color,
 ) -> Element<'a, Message> {
-    row![tint(icon, f32::from(size) + 3.0, color), text(caption).size(size)]
-        .spacing(6)
-        .align_y(Vertical::Center)
-        .into()
+    row![
+        tint(icon, f32::from(size) + 3.0, color),
+        text(caption).size(size)
+    ]
+    .spacing(6)
+    .align_y(Vertical::Center)
+    .into()
 }
 
 pub fn muted() -> Color {
-    Color { a: 0.7, ..style::palette().text }
+    Color {
+        a: 0.7,
+        ..style::palette().text
+    }
 }
 
 pub fn accent() -> Color {
@@ -95,6 +101,10 @@ icon_fn!(trash_2, "trash-2.svg");
 icon_fn!(paperclip, "paperclip.svg");
 icon_fn!(eye, "eye.svg");
 icon_fn!(lightbulb, "lightbulb.svg");
-icon_fn!(undo_2, "undo-2.svg");icon_fn!(folder_kanban, "folder-kanban.svg");
+icon_fn!(undo_2, "undo-2.svg");
+icon_fn!(folder_kanban, "folder-kanban.svg");
 icon_fn!(terminal, "terminal.svg");
 icon_fn!(play, "play.svg");
+icon_fn!(pencil, "pencil.svg");
+icon_fn!(save, "save.svg");
+icon_fn!(sparkles, "sparkles.svg");

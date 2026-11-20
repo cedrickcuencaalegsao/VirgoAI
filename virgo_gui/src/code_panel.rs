@@ -4,9 +4,13 @@
 //! Only the rows near the scroll position are built, so big files stay fast.
 
 use iced::alignment::{Horizontal, Vertical};
+use iced::font::{Style as FontStyle, Weight};
+use iced::widget::text_editor::{Binding, Status};
 use iced::widget::{
     Space, Svg, button, column, container, horizontal_space, row, scrollable, text, text_input,
 };
+use iced::widget::{rich_text, span, text_editor};
+use iced::{Color, keyboard};
 use iced::{Element, Font, Length, Theme};
 
 use super::short;
@@ -57,11 +61,16 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
         ]
         .spacing(1),
         horizontal_space(),
+        icon_button(icon_manager::pencil(), Message::ToggleEdit),
         icon_button(icon_manager::refresh_cw(), Message::ReloadCode),
         icon_button(icon_manager::x(), Message::CloseCode),
     ]
     .spacing(10)
     .align_y(Vertical::Center);
+
+    if app.is_editing() {
+        return edit_panel(app, doc, header.into());
+    }
 
     // ---- review toolbar ----
     let pending = doc.change_count();
@@ -257,10 +266,14 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
         Space::with_width(Length::Fixed(ACTIONS_W)).into()
     };
 
-    let code = text(code::display(r.src))
-        .size(13)
-        .font(Font::MONOSPACE)
-        .width(Length::Fixed(width));
+    let code: Element<'a, Message> = match r.spans {
+        Some(spans) if kind != RowKind::Added && !spans.is_empty() => colored(spans, width),
+        _ => text(code::display(r.src))
+            .size(13)
+            .font(Font::MONOSPACE)
+            .width(Length::Fixed(width))
+            .into(),
+    };
 
     container(
         row![gutter, marker, actions, code]
@@ -337,4 +350,78 @@ fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message
             .style(style::card)
             .into(),
     )
+}
+
+fn colored<'a>(spans: &[syntax::Span], width: f32) -> Element<'a, Message> {
+    let pieces: Vec<_> = spans
+        .iter()
+        .map(|s| {
+            let mut font = Font::MONOSPACE;
+            if s.bold {
+                font.weight = Weight::Bold;
+            }
+            if s.italic {
+                font.style = FontStyle::Italic;
+            }
+            span(s.text.replace('\t', "    "))
+                .color(Color::from_rgb8(s.color[0], s.color[1], s.color[2]))
+                .font(font)
+        })
+        .collect();
+    container(rich_text(pieces).size(13).font(Font::MONOSPACE))
+        .width(Length::Fixed(width))
+        .into()
+}
+
+/// Plain text-editor mode: highlighting, typing, Format and Save.
+fn edit_panel<'a>(app: &'a App, doc: &'a CodeDoc, header: Element<'a, Message>) -> Element<'a, Message> {
+    let dirty = app.edit_dirty;
+    let state: fn(&Theme) -> text::Style = if dirty { style::accent } else { style::dim };
+
+    let toolbar = row![
+        text(if dirty { "Unsaved changes" } else { "Editing" }).size(12).style(state),
+        horizontal_space(),
+        button(icon_manager::label(icon_manager::sparkles(), "Format", 12, icon_manager::muted()))
+            .padding([6, 10])
+            .on_press(Message::FormatCode)
+            .style(style::ghost_button),
+        button(icon_manager::label(icon_manager::undo_2(), "Revert", 12, icon_manager::muted()))
+            .padding([6, 10])
+            .on_press_maybe(dirty.then_some(Message::RevertEdit))
+            .style(style::ghost_button),
+        button(icon_manager::label(icon_manager::save(), "Save", 13, icon_manager::on_primary()))
+            .padding([7, 14])
+            .on_press_maybe(dirty.then_some(Message::SaveCode))
+            .style(style::primary_button),
+        button(text("Done").size(12))
+            .padding([6, 10])
+            .on_press(Message::ToggleEdit)
+            .style(style::ghost_button),
+    ]
+    .spacing(6)
+    .align_y(Vertical::Center);
+
+    let editor = text_editor(&app.edit_content)
+        .on_action(Message::EditAction)
+        .highlight(&syntax::token_for(&doc.rel), iced::highlighter::Theme::Base16Eighties)
+        .key_binding(|kp| {
+            let tab = matches!(kp.key, keyboard::Key::Named(keyboard::key::Named::Tab));
+            if tab && matches!(kp.status, Status::Focused) {
+                Some(Binding::Sequence(vec![Binding::Insert(' '); 4]))
+            } else {
+                Binding::from_key_press(kp)
+            }
+        })
+        .font(Font::MONOSPACE)
+        .size(13)
+        .padding(12)
+        .height(Length::Fill)
+        .style(style::code_editor);
+
+    container(column![header, toolbar, editor].spacing(10))
+        .padding(14)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(style::card)
+        .into()
 }

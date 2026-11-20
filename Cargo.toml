@@ -25,5 +25,8 @@ members = [
     "icon_manager",
     "style",
     "app",
-    "shared", "virgo_engine",
+    "shared",
+    "virgo_engine",
+    "syntax",
+    "formatter",
 ]

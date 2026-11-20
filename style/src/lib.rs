@@ -631,3 +631,20 @@ pub fn filter_chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::S
         }
     }
 }
+
+/// The code editor: dark field, hairline border, gold when focused.
+pub fn code_editor(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
+    let mut s = text_editor::default(theme, status);
+    s.background = Background::Color(bg());
+    s.border = Border {
+        color: if matches!(status, text_editor::Status::Focused) {
+            alpha(gold(), 0.5)
+        } else {
+            line()
+        },
+        width: 1.0,
+        radius: 14.0.into(),
+    };
+    s.selection = alpha(gold(), 0.30);
+    s
+}

@@ -9,7 +9,7 @@
 //! One extra "live" hunk (`LIVE_ID`) shows what the model is typing right now.
 //! Nothing touches the disk until `accept`, `apply` or `undo_apply`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -87,6 +87,8 @@ pub struct CodeDoc {
     crlf: bool,
     trailing_newline: bool,
     max_chars: usize,
+    /// Lines (0-based) that the last applied change added or rewrote. Shown green.
+    flash: BTreeSet<usize>,
 }
 
 impl CodeDoc {
@@ -122,6 +124,7 @@ impl CodeDoc {
             trailing_newline: text.ends_with('\n'),
             original_text: text,
             max_chars: 0,
+            flash: BTreeSet::new(),
         };
         doc.recompute_width();
         doc
@@ -297,6 +300,7 @@ impl CodeDoc {
         self.previous = Some(before.clone());
         self.previous_hunks = vec![self.pending.remove(idx)];
         self.lines = out;
+        self.mark_changed(&before); // highlight what was just written
         self.restage();
         Ok((before, new_text))
     }
@@ -406,7 +410,8 @@ impl CodeDoc {
         fs::write(&self.path, &new_text)
             .map_err(|e| format!("Could not write {}: {e}", self.rel))?;
 
-        self.previous = Some(std::mem::replace(&mut self.original_text, new_text));
+        let before = std::mem::replace(&mut self.original_text, new_text);
+        self.previous = Some(before.clone());
         self.previous_hunks = self
             .pending
             .iter()
@@ -417,6 +422,7 @@ impl CodeDoc {
         self.lines = out;
         self.edits.clear();
         self.groups.clear();
+        self.mark_changed(&before); // highlight what was just written
         self.restage();
         Ok(count)
     }
@@ -442,7 +448,6 @@ impl CodeDoc {
     }
 
     // ---- display ---------------------------------------------------------
-
     pub fn rows(&self) -> Vec<RowRef<'_>> {
         // line -> (group id, is the first line of the group)
         let mut owner: BTreeMap<usize, (u32, bool)> = BTreeMap::new();
@@ -456,7 +461,12 @@ impl CodeDoc {
         for (index, line) in self.lines.iter().enumerate() {
             match self.edits.get(&index) {
                 None => out.push(RowRef {
-                    kind: RowKind::Normal,
+                    // Lines the last applied change wrote are shown green.
+                    kind: if self.flash.contains(&index) {
+                        RowKind::Added
+                    } else {
+                        RowKind::Normal
+                    },
                     line: index,
                     number: Some(index + 1),
                     show_actions: true,
@@ -562,6 +572,15 @@ impl CodeDoc {
     pub fn undo_depth(&self) -> usize {
         usize::from(self.previous.is_some())
     }
+
+    /// Highlight the lines of the current text that differ from `before`.
+    pub fn mark_changed(&mut self, before: &str) {
+        self.flash = changed_lines(before, &self.lines);
+    }
+
+    pub fn clear_flash(&mut self) {
+        self.flash.clear();
+    }
 }
 
 /// Find `search` in `lines`: exact (ignoring trailing spaces) first, then ignoring
@@ -617,6 +636,61 @@ pub fn display(line: &str) -> String {
     } else {
         expanded
     }
+}
+
+/// Indexes of lines in `after` that are new or rewritten compared with `before`.
+/// Trims the common start and end, then runs an LCS on the middle part.
+fn changed_lines(before: &str, after: &[String]) -> BTreeSet<usize> {
+    let old: Vec<&str> = before.lines().collect();
+    let new: Vec<&str> = after.iter().map(String::as_str).collect();
+
+    let mut pre = 0;
+    while pre < old.len() && pre < new.len() && old[pre] == new[pre] {
+        pre += 1;
+    }
+    let mut suf = 0;
+    while suf < old.len() - pre
+        && suf < new.len() - pre
+        && old[old.len() - 1 - suf] == new[new.len() - 1 - suf]
+    {
+        suf += 1;
+    }
+
+    let o = &old[pre..old.len() - suf];
+    let n = &new[pre..new.len() - suf];
+    let mut out = BTreeSet::new();
+
+    // Pure insertion, or too big for the table: mark the whole changed span.
+    if o.is_empty() || o.len() * n.len() > 4_000_000 {
+        out.extend(pre..new.len() - suf);
+        return out;
+    }
+
+    let w = n.len() + 1;
+    let mut t = vec![0u32; (o.len() + 1) * w];
+    for i in (0..o.len()).rev() {
+        for j in (0..n.len()).rev() {
+            t[i * w + j] = if o[i] == n[j] {
+                t[(i + 1) * w + j + 1] + 1
+            } else {
+                t[(i + 1) * w + j].max(t[i * w + j + 1])
+            };
+        }
+    }
+
+    let (mut i, mut j) = (0, 0);
+    while j < n.len() {
+        if i < o.len() && o[i] == n[j] {
+            i += 1;
+            j += 1;
+        } else if i < o.len() && t[(i + 1) * w + j] >= t[i * w + j + 1] {
+            i += 1; // an old line that was removed
+        } else {
+            out.insert(pre + j); // a new line
+            j += 1;
+        }
+    }
+    out
 }
 
 #[cfg(test)]

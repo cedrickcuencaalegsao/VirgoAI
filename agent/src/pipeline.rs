@@ -71,29 +71,48 @@ of making it, and do not claim a change succeeded: the app reports the real resu
 one short sentence before each block.";
 
 const EDIT_PROTOCOL: &str = "# Editing project files\n\
-Write one fenced block per file, with the info string `edit` followed by the path relative \
-to the project root:\n\
-````edit src/main.rs\n\
+Write one fenced block per file. The opening line is three backticks, the word `edit`, \
+then the path relative to the project root. Example of a complete, valid block:\n\
+````````edit src/main.rs\n\
 <<<<<<< SEARCH\n\
 exact lines copied from the current file\n\
 =======\n\
 replacement lines\n\
 >>>>>>> REPLACE\n\
-```\n\
-Rules: SEARCH must match the current file exactly (including indentation) and include \
-2-3 lines of context so it is unique. You may use several SEARCH/REPLACE pairs in one block. \
-To create a new file leave SEARCH empty. To delete lines leave REPLACE empty. To delete a whole \
-file write a block ```delete path/to/file``` with nothing inside. Only edit files whose contents \
-were provided. To verify your work you may add a block with the info string `run` containing ONE \
-shell command (for example `cargo check`); the user will approve it and you will receive the output.";
+```````\n\
+Rules:\n\
+- Use exactly three backticks to open and to close the block.\n\
+- ALWAYS include the three marker lines `<<<<<<< SEARCH`, `=======` and `>>>>>>> REPLACE`. \
+Never write only the new code: a block without the markers is ignored and nothing is changed.\n\
+- SEARCH must match the current file exactly (including indentation) and include 2-3 lines \
+of context so it is unique. You may use several SEARCH/REPLACE pairs in one block.\n\
+- To create a new file leave SEARCH empty. To delete lines leave REPLACE empty.\n\
+- To delete a whole file write a block ```delete path/to/file``` with nothing inside.\n\
+- Only edit files whose contents were provided.\n\
+- To verify your work you may add a block with the info string `run` containing ONE shell \
+command (for example `cargo check`); the user will approve it and you will receive the output.";
 
 /// Appended to the system prompt of a single plan step.
 const STEP_RULES: &str = "# This turn: ONE plan step\n\
-You are carrying out a single step of an approved plan. Write exactly ONE `edit` block, for the \
-file named in the step (several SEARCH/REPLACE pairs inside that block are fine). Do not touch \
-other files and do not repeat steps that are already done. SEARCH text must be copied exactly \
-from the CURRENT file contents given below, which already include the earlier steps. Do not add \
-`run` blocks. After the block write nothing else.";
+You are carrying out a single step of an approved plan. Write exactly ONE fenced block for the \
+file named in the step. Do not touch other files and do not repeat steps that are already done. \
+The file contents below are CURRENT and already include the earlier steps. Do not add `run` \
+blocks and write nothing after the block.\n\
+Use three backticks to open and to close the block. Pick ONE of these two forms:\n\
+A) Short file (under about 80 lines) or a new file: write the COMPLETE new contents of the file:\n\
+``````edit path/to/file.rs\n\
+(the whole file, with your change included)\n\
+`````\n\
+B) Longer file: write SEARCH/REPLACE markers, copying the SEARCH lines exactly from the file:\n\
+````edit path/to/file.rs\n\
+<<<<<<< SEARCH\n\
+    let old = 1;\n\
+=======\n\
+    let old = 1;\n\
+    let added = 2;\n\
+>>>>>>> REPLACE\n\
+```\n\
+Never output only the changed line without markers, and do not wrap the block in another fence. ```";
 
 const REPAIR_SYSTEM: &str = "You fix JSON plans for a coding assistant. You get the user's \
 request, the project files, a previous plan and a list of problems found by an automatic checker. \
@@ -422,7 +441,15 @@ pub fn step_request(cfg: &Config, input: &StepInput) -> ChatRequest {
         stream: true,
         think: cfg.executor_think.then_some(true),
         format: None,
-        options: Options::new(cfg.num_ctx, Some(0.1)),
+        options: Options::new(
+            cfg.num_ctx,
+            // A retry at 0.1 gives the same wrong answer again, so loosen it up.
+            Some(if input.retry_error.is_some() {
+                0.6
+            } else {
+                0.1
+            }),
+        ),
         keep_alive: cfg.keep_alive.clone(),
     }
 }

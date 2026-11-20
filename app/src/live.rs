@@ -21,10 +21,13 @@ use super::{ActionStatus, App, Message};
 const ROW_H: f32 = 24.0;
 
 impl App {
-    /// Reviewing is on for this reply: live edits are enabled, a folder is open and
-    /// the reply is not a step of an already approved plan.
+    /// Review mode: only when Edit mode is on (plus live edit enabled, a folder open,
+    /// and this being the reply that is being reviewed).
     pub(crate) fn live_wanted(&self, msg_idx: usize) -> bool {
-        self.cfg.live_edit && self.project.is_some() && self.live_msg == Some(msg_idx)
+        self.edit_mode
+            && self.cfg.live_edit
+            && self.project.is_some()
+            && self.live_msg == Some(msg_idx)
     }
 
     /// A new reply starts. Earlier pending hunks stay reviewable.
@@ -70,13 +73,14 @@ impl App {
     }
 
     /// (accepted, rejected, still open) hunks of one edit block of the live reply.
+    /// (accepted, rejected, still open) hunks of one edit block of the live reply.
     pub fn live_card(
         &self,
         msg_idx: usize,
         action: usize,
         hunks: usize,
     ) -> Option<(usize, usize, usize)> {
-        if self.live_msg != Some(msg_idx) || !self.cfg.live_edit {
+        if !self.live_wanted(msg_idx) {
             return None;
         }
         let count = |set: &HashSet<(usize, usize)>| {

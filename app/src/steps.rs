@@ -15,6 +15,7 @@ use agent::{ChatMessage, Role};
 use iced::Task;
 use iced::widget::text_editor;
 use ollama::client;
+use workspace::Action;
 
 use super::{ActionStatus, App, Message, Phase, scroll_to_end};
 
@@ -273,6 +274,7 @@ impl App {
     }
 
     /// The executor stream of a step ended: apply, verify, then move on or retry.
+        /// The executor stream of a step ended: apply, verify, then move on or retry.
     pub(crate) fn on_step_done(&mut self) -> Task<Message> {
         self.phase = Phase::Idle;
         let msg_idx = self.messages.len().saturating_sub(1);
@@ -281,7 +283,10 @@ impl App {
             return self.step_failed(e, false); // retrying cannot fix this
         }
 
-        // ---- live review: stage the edits, then wait for Accept / Reject ----
+        // Turn whole-file / marker-less / 4-backtick replies into a valid edit block.
+        self.normalize_step_reply(msg_idx);
+
+        // ---- live review (Edit mode): stage the edits, then wait for Accept / Reject ----
         if self.live_wanted(msg_idx) {
             self.apply_streamed(true); // new files (and deletes with auto-apply)
             let _ = self.restage(msg_idx, false);
@@ -311,10 +316,8 @@ impl App {
             }
 
             if ok == 0 {
-                return self.step_failed(
-                    "The reply contained no edit block for this step.".into(),
-                    true,
-                );
+                let why = self.no_edit_error(msg_idx);
+                return self.step_failed(why, true);
             }
             if let Some(run) = self.plan_run.as_mut() {
                 run.mark_done();
@@ -323,14 +326,14 @@ impl App {
             return self.start_next_step();
         }
 
-        // ---- no live review: apply straight to disk (live edit off) ----
+        // ---- plan mode: apply straight to disk ----
         self.apply_edits(msg_idx, None);
 
         let (ok, bad) = self.edit_counts(msg_idx);
         let error = if bad > 0 {
             Some(self.step_errors(msg_idx))
         } else if ok == 0 {
-            Some("The reply contained no edit block for this step.".to_string())
+            Some(self.no_edit_error(msg_idx))
         } else {
             None
         };
@@ -488,4 +491,173 @@ impl App {
             scroll_to_end()
         }
     }
+
+    fn no_edit_error(&self, msg_idx: usize) -> String {
+        let reply = self
+            .messages
+            .get(msg_idx)
+            .map(|m| m.content.as_str())
+            .unwrap_or("");
+        if reply.contains("edit ") && !reply.contains("<<<<<<<") {
+            "Your edit block had no SEARCH/REPLACE markers, so nothing was applied. Write the \
+             block exactly like this, with three backticks and all three marker lines:\n\
+             ````edit path/to/file.rs\n\
+             <<<<<<< SEARCH\n\
+             (existing lines copied exactly from the file)\n\
+             =======\n\
+             (new lines)\n\
+             >>>>>>> REPLACE\n\
+             ```"
+            .to_string()
+        } else {
+            "The reply contained no edit block for this step. Reply with one fenced `edit` block \
+             that has <<<<<<< SEARCH, ======= and >>>>>>> REPLACE lines."
+                .to_string()
+        }
+    }
+
+    /// Rewrite the executor's reply into a clean `edit` block for the current step.
+    /// Small models often write four backticks, omit the SEARCH/REPLACE markers, or
+    /// return the whole file. All of that is turned into a valid block here, so the
+    /// normal apply / review code works unchanged.
+    fn normalize_step_reply(&mut self, msg_idx: usize) {
+        let Some(run) = self.plan_run.as_ref() else {
+            return;
+        };
+        let Some(cur) = run.cur else { return };
+        let step_file = run.plan.steps[cur].file.clone();
+
+        let Some(content) = self
+            .messages
+            .get(msg_idx)
+            .map(|m| pipeline::strip_think_tags(&m.content))
+        else {
+            return;
+        };
+
+        // Already a valid edit: leave it alone.
+        if workspace::parse_actions(&content)
+            .iter()
+            .any(|a| matches!(a, Action::Edit { .. }))
+        {
+            return;
+        }
+
+        // First fenced block, tolerant of 3 or 4 backticks on either end.
+        let mut lines = content.lines();
+        let mut body: Vec<&str> = Vec::new();
+        let mut found = false;
+        while let Some(line) = lines.next() {
+            let t = line.trim();
+            if t.chars().take_while(|c| *c == '`').count() < 3 {
+                continue;
+            }
+            for l in lines.by_ref() {
+                let lt = l.trim();
+                if lt.len() >= 3 && lt.chars().all(|c| c == '`') {
+                    break;
+                }
+                body.push(l);
+            }
+            found = true;
+            break;
+        }
+        if !found {
+            return;
+        }
+
+        let body_text = body.join("\n");
+        let has_markers = body_text.contains("<<<<<<<")
+            && body_text.contains("=======")
+            && body_text.contains(">>>>>>>");
+
+        let block = if has_markers {
+            body_text
+        } else {
+            let Some(project) = self.project.as_ref() else {
+                return;
+            };
+            let original = project.read(&step_file).unwrap_or_default();
+            match infer_edit(&original, &body_text) {
+                Some((search, replace)) => {
+                    format!("<<<<<<< SEARCH\n{search}\n=======\n{replace}\n>>>>>>> REPLACE")
+                }
+                None => return, // cannot tell what it meant: the retry error explains the format
+            }
+        };
+
+        if let Some(m) = self.messages.get_mut(msg_idx) {
+            m.content = format!("```edit {step_file}\n{block}\n```");
+        }
+    }
+}
+
+/// Text before the first `=`, `(` or `{`: identifies a statement like `let fruits`.
+fn line_key(line: &str) -> String {
+    let t = line.trim();
+    let end = t
+        .find(|c| c == '=' || c == '(' || c == '{')
+        .unwrap_or(t.len());
+    t[..end].trim().to_string()
+}
+
+/// (search, replace) for a reply that has no SEARCH/REPLACE markers.
+/// * new/empty file: the body is the file;
+/// * body about as long as the file: it is the complete new file;
+/// * otherwise: it replaces the one original line that starts the same way.
+fn infer_edit(original: &str, body: &str) -> Option<(String, String)> {
+    let body = body.trim_end_matches('\n');
+    if body.trim().is_empty() {
+        return None;
+    }
+    if original.trim().is_empty() {
+        return Some((String::new(), body.to_string()));
+    }
+
+    let orig_lines: Vec<&str> = original.lines().collect();
+    let body_lines = body.lines().count();
+
+    // Whole file.
+    if body_lines * 5 >= orig_lines.len() * 4 {
+        return Some((
+            original.trim_end_matches('\n').to_string(),
+            body.to_string(),
+        ));
+    }
+
+    // A snippet: find the single original line it replaces.
+    let key = line_key(body.lines().next()?);
+    if key.len() < 3 {
+        return None;
+    }
+    let hits: Vec<&str> = orig_lines
+        .iter()
+        .copied()
+        .filter(|l| line_key(l) == key)
+        .collect();
+    if hits.len() != 1 {
+        return None;
+    }
+
+    // Restore the indentation the model dropped.
+    let indent: String = hits[0].chars().take_while(|c| c.is_whitespace()).collect();
+    let first_has_indent = body
+        .lines()
+        .next()
+        .is_some_and(|l| l.starts_with(char::is_whitespace));
+    let replace = if indent.is_empty() || first_has_indent {
+        body.to_string()
+    } else {
+        body.lines()
+            .map(|l| {
+                if l.is_empty() {
+                    l.to_string()
+                } else {
+                    format!("{indent}{l}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    Some((hits[0].to_string(), replace))
 }

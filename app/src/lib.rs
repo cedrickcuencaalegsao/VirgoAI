@@ -6,7 +6,7 @@ use iced::widget::{scrollable, text_editor};
 use iced::{Subscription, Task, Theme, keyboard};
 
 use terminal::{self, RunResult};
-use workspace::{self, Action, ChangeSet, HunkState, LiveHunk};
+use workspace::{self, Action, ChangeSet};
 
 use agent::pipeline::{self, Intent, Pending, Proposal};
 use agent::plan::PlanRun;
@@ -1136,6 +1136,9 @@ impl App {
         if raw.is_empty() || self.is_busy() {
             return Task::none();
         }
+        if let Some(doc) = self.code.as_mut() {
+            doc.clear_flash();
+        }
         self.input.clear();
         self.input_editor = text_editor::Content::new();
 
@@ -1301,12 +1304,16 @@ impl App {
         }
         let buf = std::mem::take(&mut self.stream_buf);
         self.append_content(&buf);
+
+        // Writes closed blocks directly (plan mode) or only new files (edit mode).
         if buf.contains('`') {
             self.apply_streamed(false);
         }
-        if self.live_active() {
-            let open = self.live_update(false);
-            return Task::batch([open, self.live_follow()]);
+
+        // Edit mode: show the hunk being typed and stage finished hunks.
+        let idx = self.messages.len().saturating_sub(1);
+        if self.live_wanted(idx) {
+            return self.restage(idx, true);
         }
         Task::none()
     }
@@ -1327,19 +1334,8 @@ impl App {
                     if let Some(m) = self.messages.last_mut() {
                         m.content = plan.clone();
                     }
-                    self.phase = Phase::Idle;
-                    self.reviewing = true;
-                    self.plan_editor = text_editor::Content::with_text(&plan);
-                    self.status = if plan.is_empty() {
-                        "The planner gave no plan. Write one below (or leave it empty), then press Apply plan.".into()
-                    } else {
-                        format!(
-                            "Plan ready from {}. Edit it, then press Apply plan to run {}.",
-                            self.cfg.planner_model, self.cfg.executor_model
-                        )
-                    };
-                    self.save_chat();
-                    // return scroll_to_end();
+                    // Stay in Phase::Planning: finish_planning either starts the repair
+                    // call (which needs this phase) or switches to Idle + reviewing.
                     return self.finish_planning(plan, false);
                 }
 
@@ -1357,28 +1353,24 @@ impl App {
                 self.start_executor(Some(plan))
             }
             Phase::Executing => {
-                // A plan step finished: apply it, then run the next one.
+                // A plan step finished: apply (or stage) it, then run the next one.
                 if self.plan_run.as_ref().is_some_and(|r| r.cur.is_some()) {
                     return self.on_step_done();
                 }
                 self.phase = Phase::Idle;
                 let idx = self.messages.len().saturating_sub(1);
                 let mut next = Task::none();
-                let live_task = if self.live_active() {
-                    self.live_update(true)
-                } else {
-                    Task::none()
-                };
-                let live_used = self.live_msg == Some(idx) && self.live_seen > 0;
                 if let Some(doc) = self.code.as_mut() {
                     doc.clear_live();
                 }
+
                 if self.live_wanted(idx) {
-                    // New files and (with auto-apply) deletes are written now; edits to
-                    // existing files wait in the code panel for accept / reject.
+                    // EDIT MODE: new files are written now; edits to existing files
+                    // wait in the code panel for accept / reject.
                     self.apply_streamed(true);
                     next = self.finish_live(idx);
-                } else if self.cfg.auto_apply {
+                } else if !self.edit_mode {
+                    // PLAN MODE: the executor's edits go straight to the files.
                     self.apply_streamed(true); // flush anything left (e.g. unclosed last fence)
                     let (ok, bad) = self.edit_counts(idx);
                     if ok + bad > 0 {
@@ -1388,18 +1380,6 @@ impl App {
                         if bad > 0 {
                             next = self.retry_failed(idx);
                         }
-                    } else if live_used {
-                        let failed = self.code.as_ref().map_or(0, |d| d.failed_hunks());
-                        self.status = format!(
-                            "{} change(s) ready. Accept or reject each one in the code panel.{}",
-                            self.live_seen,
-                            if failed > 0 {
-                                format!(" {failed} could not be located in the file.")
-                            } else {
-                                String::new()
-                            }
-                        );
-                        next = live_task;
                     } else if self.intent == Intent::Change {
                         self.status =
                             "The executor produced no edit blocks, so no file was changed.".into();
@@ -1407,7 +1387,7 @@ impl App {
                         self.status = "Done".into();
                     }
                 } else if self.intent == Intent::Change {
-                    // Review mode (auto-apply off): stage the same blocks in the code panel.
+                    // Edit mode with live edit switched off: stage the blocks per file.
                     let reply = self
                         .messages
                         .last()
@@ -1535,14 +1515,6 @@ impl App {
 
     // ---- live editing -----------------------------------------------------
 
-    /// Stream edit blocks into the code panel instead of writing them to disk.
-    /// Off in Auto mode and while a structured plan runs (steps apply their own edits).
-    fn live_active(&self) -> bool {
-        self.project.is_some()
-            && !self.cfg.auto_apply
-            && !self.plan_run.as_ref().is_some_and(|r| r.cur.is_some())
-    }
-
     fn live_reset(&mut self) {
         self.live_msg = None;
         self.live_committed.clear();
@@ -1550,193 +1522,15 @@ impl App {
         self.live_seen = 0;
     }
 
-    /// True when edit blocks of this message for `path` are handled by the code panel,
-    /// so the chat should not show a second Apply button for them.
+    /// True when edit blocks of this message for `path` are reviewed in the code panel
+    /// (Edit mode), so the chat should not show a second Apply button for them.
     pub fn live_handles(&self, msg: usize, path: &str) -> bool {
-        self.live_msg == Some(msg)
+        self.live_wanted(msg)
             && self
                 .project
                 .as_ref()
                 .is_some_and(|p| p.is_file(path.trim().trim_matches('`').trim_start_matches("./")))
     }
-
-    /// Hand new hunks of the streaming reply to the code panel.
-    fn live_update(&mut self, final_pass: bool) -> Task<Message> {
-        let idx = self.messages.len().saturating_sub(1);
-        let content = match self.messages.get(idx) {
-            Some(m) if m.role == Role::Assistant => m.content.clone(),
-            _ => return Task::none(),
-        };
-        let edits = workspace::parse_live(&content);
-        if edits.is_empty() {
-            return Task::none();
-        }
-        if self.live_msg != Some(idx) {
-            self.live_reset();
-            if self.edit_root().is_err() {
-                return Task::none();
-            }
-            self.live_msg = Some(idx);
-        }
-
-        let mut done: Vec<(String, String, String)> = Vec::new();
-        let mut tail: Option<(String, LiveHunk)> = None;
-        for (e, edit) in edits.iter().enumerate() {
-            let path = edit
-                .path
-                .trim()
-                .trim_matches('`')
-                .trim_start_matches("./")
-                .to_string();
-            // New files are not handled here (they keep the Apply card).
-            if !self.project.as_ref().is_some_and(|p| p.is_file(&path)) {
-                continue;
-            }
-            let seen = self.live_committed.get(&e).copied().unwrap_or(0);
-            let finished = edit
-                .hunks
-                .iter()
-                .take_while(|h| h.state == HunkState::Done)
-                .count();
-            for h in &edit.hunks[seen.min(finished)..finished] {
-                done.push((path.clone(), h.search.clone(), h.replace.clone()));
-            }
-            self.live_committed.insert(e, finished);
-            if !final_pass {
-                if let Some(h) = edit.hunks.get(finished) {
-                    tail = Some((path, h.clone()));
-                }
-            }
-        }
-
-        let mut tasks = Vec::new();
-        for (path, search, replace) in done {
-            self.live_seen += 1;
-            if let Some(t) = self.live_stage(path, search, replace) {
-                tasks.push(t);
-            }
-        }
-
-        match tail {
-            Some((path, hunk)) => {
-                let shown = self.code.as_ref().is_some_and(|d| d.rel == path);
-                let free = self.code.as_ref().map_or(true, |d| !d.has_edits());
-                if !shown && free {
-                    tasks.push(self.open_file(path.clone()));
-                }
-                if let Some(doc) = self.code.as_mut() {
-                    if doc.rel == path {
-                        doc.set_live(
-                            &hunk.search,
-                            &hunk.replace,
-                            hunk.state == HunkState::Writing,
-                        );
-                    }
-                }
-            }
-            None => {
-                if let Some(doc) = self.code.as_mut() {
-                    doc.clear_live();
-                }
-            }
-        }
-        Task::batch(tasks)
-    }
-
-    /// A finished hunk: stage it in the open file, or queue it for a later file.
-    fn live_stage(
-        &mut self,
-        path: String,
-        search: String,
-        replace: String,
-    ) -> Option<Task<Message>> {
-        let shown = self.code.as_ref().is_some_and(|d| d.rel == path);
-        let free = self.code.as_ref().map_or(true, |d| !d.has_edits());
-        let mut task = None;
-        if !shown && free {
-            task = Some(self.open_file(path.clone()));
-        }
-        match self.code.as_mut() {
-            Some(doc) if doc.rel == path => {
-                doc.add_pending(search, replace);
-            }
-            _ => self.live_queue.push((path, search, replace)),
-        }
-        task
-    }
-
-    /// When the open file has nothing left to decide, show the next queued file.
-    // fn advance_live(&mut self) -> Task<Message> {
-    //     let busy = self.code.as_ref().is_some_and(|d| d.has_edits());
-    //     if busy || self.live_queue.is_empty() {
-    //         return Task::none();
-    //     }
-    //     let path = self.live_queue[0].0.clone();
-    //     let task = self.open_file(path.clone());
-    //     let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.live_queue)
-    //         .into_iter()
-    //         .partition(|(p, _, _)| *p == path);
-    //     self.live_queue = rest;
-    //     if let Some(doc) = self.code.as_mut() {
-    //         if doc.rel == path {
-    //             for (_, search, replace) in mine {
-    //                 doc.add_pending(search, replace);
-    //             }
-    //         }
-    //     }
-    //     self.status = format!("Next file: {path}");
-    //     task
-    // }
-
-    /// Keep the hunk being typed in view.
-    fn live_follow(&self) -> Task<Message> {
-        const ROW_H: f32 = 24.0; // same as code_panel::ROW_H
-        let Some((first, last)) = self.code.as_ref().and_then(|d| d.live_span()) else {
-            return Task::none();
-        };
-        let top = first as f32 * ROW_H;
-        let bottom = (last as f32 + 1.0) * ROW_H;
-        let (y, h) = (self.code_scroll_y, self.code_view_h);
-        if top >= y && bottom <= y + h - ROW_H {
-            return Task::none();
-        }
-        scrollable::scroll_to(
-            shared::code_scroll_id(),
-            scrollable::AbsoluteOffset {
-                x: 0.0,
-                y: (bottom - h * 0.7).max(0.0),
-            },
-        )
-    }
-
-    // fn accept_hunk(&mut self, id: u32) -> Task<Message> {
-    //     let Some(doc) = self.code.as_mut() else {
-    //         return Task::none();
-    //     };
-    //     match doc.accept(id) {
-    //         Ok((before, after)) => {
-    //             let rel = doc.rel.clone();
-    //             self.status = format!("Accepted a change in {rel}");
-    //             self.record_change(rel, before, after);
-    //             self.advance_live()
-    //         }
-    //         Err(e) => {
-    //             self.status = e;
-    //             Task::none()
-    //         }
-    //     }
-    // }
-
-    /// Make an accepted change show up in the Changes tab and "Revert last AI edit".
-    // fn record_change(&mut self, rel: String, before: String, after: String) {
-    //     let mut set = ChangeSet::new();
-    //     set.record(FileChange {
-    //         rel,
-    //         before: Some(before),
-    //         after: Some(after),
-    //     });
-    //     self.changes.push(set);
-    // }
 
     // ---- code panel -------------------------------------------------------
 
@@ -2618,11 +2412,13 @@ impl App {
     }
 
     /// Apply blocks of the assistant reply that are complete. `final_pass` also reads a
-    /// truncated last block. Each block is written and verified before the next one.
+    /// truncated last block. Plan mode (edit mode off) writes everything directly;
+    /// edit mode writes only new files here and stages edits for review.
     fn apply_streamed(&mut self, final_pass: bool) {
         let idx = self.messages.len().saturating_sub(1);
         let live = self.live_wanted(idx);
-        if (!self.cfg.auto_apply && !live) || self.project.is_none() {
+        let direct = !self.edit_mode;
+        if (!direct && !live) || self.project.is_none() {
             return;
         }
         let Some(msg) = self.messages.get(idx).filter(|m| m.role == Role::Assistant) else {
@@ -2644,7 +2440,7 @@ impl App {
             return;
         }
 
-        // Live review: edits to existing files are staged in the code panel instead.
+        // Edit mode: edits to existing files are staged in the code panel instead.
         // Only new files (and deletes, when auto-apply is on) are written here.
         let root = self.edit_root().ok();
         let mask: Vec<bool> = actions
@@ -2740,8 +2536,17 @@ impl App {
             return;
         }
         let files: Vec<String> = set.files.iter().map(|f| f.rel.clone()).collect();
+        // Text before the change, for the green highlight (new files: everything is new).
+        let marks: Vec<(String, String)> = set
+            .files
+            .iter()
+            .filter(|f| f.after.is_some())
+            .map(|f| (f.rel.clone(), f.before.clone().unwrap_or_default()))
+            .collect();
+
         self.changes.push(set);
         self.after_disk_change(&files);
+        self.highlight_applied(marks);
         if failed > 0 {
             self.status = format!("Applied edits to {} ({failed} failed)", files.join(", "));
         }
@@ -2830,9 +2635,22 @@ impl App {
     /// Reload the open file and rescan the tree after files changed on disk.
     fn after_disk_change(&mut self, files: &[String]) {
         self.parked.retain(|rel, _| !files.contains(rel));
-        if let Some(doc) = self.code.as_mut() {
-            if files.iter().any(|f| *f == doc.rel) {
-                let _ = doc.reload();
+
+        let open_changed = self
+            .code
+            .as_ref()
+            .is_some_and(|d| files.iter().any(|f| *f == d.rel));
+
+        if open_changed {
+            if let Some(doc) = self.code.as_mut() {
+                if let Err(e) = doc.reload() {
+                    self.status = e; // used to be ignored
+                }
+            }
+        } else if self.code.is_none() {
+            // Nothing is open: show the file that was just edited.
+            if let Some(first) = files.first().cloned() {
+                self.show_file(&first);
             }
         }
         self.refresh_project();
@@ -2917,6 +2735,26 @@ impl App {
     fn rebuild_graph(&mut self) {
         self.memory_graph = Graph::build(&self.store.load_all());
         self.memory_hover = None;
+    }
+
+    /// After edits were written straight to disk: show the edited file in the code
+    /// panel and highlight the lines that changed. `marks` = (file, text before).
+    fn highlight_applied(&mut self, marks: Vec<(String, String)>) {
+        let Some((first, _)) = marks.first().cloned() else {
+            return;
+        };
+        let open_is_changed = self
+            .code
+            .as_ref()
+            .is_some_and(|d| marks.iter().any(|(rel, _)| *rel == d.rel));
+        if !open_is_changed {
+            self.show_file(&first);
+        }
+        if let Some(doc) = self.code.as_mut() {
+            if let Some((_, before)) = marks.iter().find(|(rel, _)| *rel == doc.rel) {
+                doc.mark_changed(before);
+            }
+        }
     }
 }
 

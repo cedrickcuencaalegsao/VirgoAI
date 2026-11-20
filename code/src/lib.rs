@@ -305,6 +305,7 @@ impl CodeDoc {
         self.previous = Some(before.clone());
         self.previous_hunks = vec![self.pending.remove(idx)];
         self.lines = out;
+        self.rehighlight();
         self.mark_changed(&before); // highlight what was just written
         self.restage();
         Ok((before, new_text))
@@ -427,6 +428,7 @@ impl CodeDoc {
         self.lines = out;
         self.edits.clear();
         self.groups.clear();
+        self.rehighlight();
         self.mark_changed(&before); // highlight what was just written
         self.restage();
         Ok(count)
@@ -477,7 +479,7 @@ impl CodeDoc {
                     show_actions: true,
                     hunk: None,
                     src: line.as_str(),
-                    spans: None,
+                    spans: self.spans_for(index),
                 }),
                 Some(replacement) => {
                     let info = owner.get(&index).copied();

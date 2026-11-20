@@ -267,7 +267,7 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
     };
 
     let code: Element<'a, Message> = match r.spans {
-        Some(spans) if kind != RowKind::Added && !spans.is_empty() => colored(spans, width),
+        Some(spans) if !spans.is_empty() => colored(spans, width),
         _ => text(code::display(r.src))
             .size(13)
             .font(Font::MONOSPACE)
@@ -374,25 +374,46 @@ fn colored<'a>(spans: &[syntax::Span], width: f32) -> Element<'a, Message> {
 }
 
 /// Plain text-editor mode: highlighting, typing, Format and Save.
-fn edit_panel<'a>(app: &'a App, doc: &'a CodeDoc, header: Element<'a, Message>) -> Element<'a, Message> {
+fn edit_panel<'a>(
+    app: &'a App,
+    doc: &'a CodeDoc,
+    header: Element<'a, Message>,
+) -> Element<'a, Message> {
     let dirty = app.edit_dirty;
     let state: fn(&Theme) -> text::Style = if dirty { style::accent } else { style::dim };
 
     let toolbar = row![
-        text(if dirty { "Unsaved changes" } else { "Editing" }).size(12).style(state),
+        text(if dirty { "Unsaved changes" } else { "Editing" })
+            .size(12)
+            .style(state),
         horizontal_space(),
-        button(icon_manager::label(icon_manager::sparkles(), "Format", 12, icon_manager::muted()))
-            .padding([6, 10])
-            .on_press(Message::FormatCode)
-            .style(style::ghost_button),
-        button(icon_manager::label(icon_manager::undo_2(), "Revert", 12, icon_manager::muted()))
-            .padding([6, 10])
-            .on_press_maybe(dirty.then_some(Message::RevertEdit))
-            .style(style::ghost_button),
-        button(icon_manager::label(icon_manager::save(), "Save", 13, icon_manager::on_primary()))
-            .padding([7, 14])
-            .on_press_maybe(dirty.then_some(Message::SaveCode))
-            .style(style::primary_button),
+        button(icon_manager::label(
+            icon_manager::sparkles(),
+            "Format",
+            12,
+            icon_manager::muted()
+        ))
+        .padding([6, 10])
+        .on_press(Message::FormatCode)
+        .style(style::ghost_button),
+        button(icon_manager::label(
+            icon_manager::undo_2(),
+            "Revert",
+            12,
+            icon_manager::muted()
+        ))
+        .padding([6, 10])
+        .on_press_maybe(dirty.then_some(Message::RevertEdit))
+        .style(style::ghost_button),
+        button(icon_manager::label(
+            icon_manager::save(),
+            "Save",
+            13,
+            icon_manager::on_primary()
+        ))
+        .padding([7, 14])
+        .on_press_maybe(dirty.then_some(Message::SaveCode))
+        .style(style::primary_button),
         button(text("Done").size(12))
             .padding([6, 10])
             .on_press(Message::ToggleEdit)
@@ -403,7 +424,10 @@ fn edit_panel<'a>(app: &'a App, doc: &'a CodeDoc, header: Element<'a, Message>) 
 
     let editor = text_editor(&app.edit_content)
         .on_action(Message::EditAction)
-        .highlight(&syntax::token_for(&doc.rel), iced::highlighter::Theme::Base16Eighties)
+        .highlight(
+            &syntax::token_for(&doc.rel),
+            iced::highlighter::Theme::Base16Eighties,
+        )
         .key_binding(|kp| {
             let tab = matches!(kp.key, keyboard::Key::Named(keyboard::key::Named::Tab));
             if tab && matches!(kp.status, Status::Focused) {

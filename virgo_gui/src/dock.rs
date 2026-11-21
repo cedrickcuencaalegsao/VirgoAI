@@ -1,17 +1,8 @@
-use iced::alignment::Vertical;
 use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Element, Length};
 
-use super::{project_panel, short};
+use super::{project_panel, short, tab};
 use app::{App, Dock, Message, Screen};
-
-fn tab(label: &'static str, active: bool, message: Message) -> Element<'static, Message> {
-    button(text(label).size(12))
-        .padding([5, 12])
-        .on_press(message)
-        .style(style::filter_chip(active))
-        .into()
-}
 
 pub fn view(app: &App) -> Element<'_, Message> {
     // The Terminal tab opens the bottom pane, so it never renders here.
@@ -35,8 +26,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         ),
         tab("Terminal", app.show_terminal, Message::ToggleTerminal),
     ]
-    .spacing(6)
-    .align_y(Vertical::Center);
+    .spacing(style::SP_1);
 
     let body: Element<'_, Message> = match dock {
         Dock::Changes => changes(app),
@@ -45,7 +35,6 @@ pub fn view(app: &App) -> Element<'_, Message> {
     };
 
     column![tabs, body]
-        .spacing(10)
         .width(Length::Fixed(300.0))
         .height(Length::Fill)
         .into()

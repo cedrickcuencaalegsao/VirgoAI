@@ -1,10 +1,9 @@
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::text_editor::{Binding, Status};
 use iced::widget::{
-    button, checkbox, column, container, horizontal_space, pick_list, row, scrollable, text,
-    text_editor,
+    button, column, container, horizontal_space, pick_list, row, scrollable, text, text_editor,
 };
-use iced::{Element, Length, Theme, keyboard};
+use iced::{Element, Length, keyboard};
 
 use super::{markdown, short};
 use agent::{ChatMessage, Role};
@@ -18,11 +17,10 @@ pub fn scroll_id() -> scrollable::Id {
 pub fn view(app: &App) -> Element<'_, Message> {
     let models = &app.models[..];
 
-    // ---- header with model pickers ----
     let mut pickers = row![].spacing(8).align_y(Vertical::Center);
     if app.cfg.use_planner {
         pickers = pickers
-            .push(text("Planner").size(12).style(style::dim))
+            .push(text("Planner").size(style::T_12).style(style::dim))
             .push(
                 pick_list(
                     models,
@@ -32,12 +30,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .placeholder("planner")
                 .width(Length::Fill)
                 .padding(7)
-                .text_size(13)
+                .text_size(style::T_13)
                 .style(style::pick),
             );
     }
     pickers = pickers
-        .push(text("Executor").size(12).style(style::dim))
+        .push(text("Executor").size(style::T_12).style(style::dim))
         .push(
             pick_list(
                 models,
@@ -46,14 +44,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
             )
             .placeholder("executor")
             .padding(7)
-            .text_size(13)
+            .text_size(style::T_13)
             .style(style::pick),
         );
 
-    // Model pickers get their own row, so they never get squeezed.
-    let header = column![pickers].spacing(10);
-
-    // ---- messages (centred reading column) ----
     let body: Element<'_, Message> = if app.messages.is_empty() {
         welcome()
     } else {
@@ -61,9 +55,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
             app.messages
                 .iter()
                 .enumerate()
-                .map(|(index, msg)| bubble(app, index, msg)),
+                .map(|(i, m)| bubble(app, i, m)),
         )
-        .spacing(18)
+        .spacing(style::SP_4)
         .padding([style::SP_2, style::SP_3])
         .into()
     };
@@ -78,56 +72,67 @@ pub fn view(app: &App) -> Element<'_, Message> {
     .width(Length::Fill)
     .height(Length::Fill);
 
-    // ---- composer ----
+    // ---- modes: small ghost row above the composer ----
     let n = app.revertable();
-    let remember = row![
-        checkbox("Edit mode (plan, review, then apply code)", app.edit_mode)
-            .on_toggle_maybe(
-                (app.project.is_some() && !app.is_busy()).then_some(Message::ToggleEditMode)
-            )
-            .size(16)
-            .text_size(12),
-        horizontal_space(),
+    let can_toggle = app.project.is_some() && !app.is_busy();
+    let modes = row![
+        button(
+            text(if app.edit_mode {
+                "Edit mode on"
+            } else {
+                "Edit mode"
+            })
+            .size(style::T_12)
+        )
+        .padding([4, 8])
+        .on_press_maybe(can_toggle.then_some(Message::ToggleEditMode(!app.edit_mode)))
+        .style(style::ghost_button),
         button(icon_manager::label(
             icon_manager::undo_2(),
-            format!("Revert last AI edit ({n})"),
+            format!("Revert last edit ({n})"),
             12,
             icon_manager::muted()
         ))
-        .padding([6, 12])
+        .padding([4, 8])
         .on_press_maybe((n > 0).then_some(Message::RevertLast))
         .style(style::ghost_button),
-        button(icon_manager::label(
-            icon_manager::database(),
-            "Remember last reply",
-            12,
-            icon_manager::muted()
-        ))
-        .padding([6, 12])
-        .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
-        .style(style::ghost_button),
+        button(text("Remember").size(style::T_12))
+            .padding([4, 8])
+            .on_press_maybe(app.has_reply().then_some(Message::RememberLast))
+            .style(style::ghost_button),
     ]
+    .spacing(style::SP_1)
     .align_y(Vertical::Center);
 
-    // Round, icon-only action button.
+    // ---- send / stop: 28px, signal only when there is text ----
     let can_send = !app.input.trim().is_empty();
     let action: Element<'_, Message> = if app.is_busy() {
-        button(icon_manager::tint(
-            icon_manager::square(),
-            16.0,
-            icon_manager::on_danger(),
-        ))
-        .padding(12)
+        button(
+            container(icon_manager::tint(
+                icon_manager::square(),
+                11.0,
+                style::danger_color(),
+            ))
+            .center(Length::Fill),
+        )
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(28.0))
+        .padding(0)
         .on_press(Message::Stop)
         .style(style::stop_button)
         .into()
     } else {
-        button(icon_manager::tint(
-            icon_manager::send(),
-            16.0,
-            icon_manager::on_primary(),
-        ))
-        .padding(12)
+        let color = if can_send {
+            style::signal()
+        } else {
+            style::dim_color()
+        };
+        button(
+            container(icon_manager::tint(icon_manager::send(), 16.0, color)).center(Length::Fill),
+        )
+        .width(Length::Fixed(28.0))
+        .height(Length::Fixed(28.0))
+        .padding(0)
         .on_press_maybe(can_send.then_some(Message::Send))
         .style(style::send_button)
         .into()
@@ -154,53 +159,217 @@ pub fn view(app: &App) -> Element<'_, Message> {
                             Binding::from_key_press(kp)
                         }
                     })
-                    .padding([12, 16])
-                    .size(15)
+                    .padding([10, 12])
+                    .size(style::T_15)
                     .height(Length::Shrink)
                     .style(style::composer_editor),
             )
-            .max_height(160) // grows with the text, then scrolls
+            .max_height(160)
             .width(Length::Fill),
-            action,
+            container(action).padding([0, 4]),
         ]
-        .spacing(8)
-        .align_y(Vertical::Bottom), // button stays at the bottom as the box grows
+        .align_y(Vertical::Bottom),
     )
-    .padding([6, 8])
+    .padding(2)
     .style(style::composer);
 
-    // Everything above the composer lines up with the reading column.
-    let mut lower = column![].spacing(12);
-    if let Some(suggestions) = suggestions(app) {
-        lower = lower.push(suggestions);
+    let mut lower = column![].spacing(style::SP_2);
+    if let Some(s) = suggestions(app) {
+        lower = lower.push(s);
     }
     if app.reviewing {
         lower = lower.push(plan_review(app));
     }
-    if let Some(panel) = super::plan_panel::view(app) {
-        lower = lower.push(panel);
+    if let Some(p) = super::plan_panel::view(app) {
+        lower = lower.push(p);
     }
-    if let Some(bar) = review_bar(app) {
-        lower = lower.push(bar);
+    if let Some(b) = review_bar(app) {
+        lower = lower.push(b);
     }
-    if let Some(bar) = proposal_bar(app) {
-        lower = lower.push(bar);
+    if let Some(b) = proposal_bar(app) {
+        lower = lower.push(b);
     }
-    if let Some(chips) = attachments(app) {
-        lower = lower.push(chips);
+    if let Some(c) = attachments(app) {
+        lower = lower.push(c);
     }
-    let lower = lower.push(remember).push(composer);
+    let lower = lower.push(modes).push(composer);
 
     column![
-        header,
+        pickers,
         history,
         container(lower)
             .max_width(style::READING_WIDTH)
             .center_x(Length::Fill),
     ]
-    .spacing(12)
+    .spacing(style::SP_3)
+    .padding(style::SP_4)
     .width(Length::Fill)
     .height(Length::Fill)
+    .into()
+}
+
+fn is_step(line: &str) -> bool {
+    let t = line.trim_start();
+    let d = t.chars().take_while(|c| c.is_ascii_digit()).count();
+    d > 0 && t[d..].starts_with(". ")
+}
+
+/// The plan as one dim line. Expands on click, never shows planner prose while streaming.
+fn plan_line<'a>(
+    app: &'a App,
+    index: usize,
+    msg: &'a ChatMessage,
+    active: bool,
+) -> Element<'a, Message> {
+    let latest = app.messages.iter().rposition(|m| m.role == Role::Plan) == Some(index);
+    let steps = if active {
+        None
+    } else if latest && app.plan_run.is_some() {
+        app.plan_run.as_ref().map(|r| r.plan.steps.len())
+    } else {
+        Some(msg.content.lines().filter(|l| is_step(l)).count()).filter(|n| *n > 0)
+    };
+    let label = match (active, steps) {
+        (true, _) => "Planning".to_string(),
+        (false, Some(1)) => "Plan · 1 step".to_string(),
+        (false, Some(n)) => format!("Plan · {n} steps"),
+        (false, None) => "Plan".to_string(),
+    };
+    let open = app.plan_open.contains(&index) && !active;
+    let chevron = if open {
+        icon_manager::chevron_down()
+    } else {
+        icon_manager::chevron_right()
+    };
+
+    let mut col = column![
+        button(icon_manager::label(chevron, label, 13, style::dim_color()))
+            .padding([2, 6])
+            .on_press_maybe(
+                (!active && !msg.content.is_empty()).then_some(Message::TogglePlan(index))
+            )
+            .style(style::ghost_button)
+    ]
+    .spacing(style::SP_2);
+    if open {
+        col = col.push(markdown::view(&msg.content));
+    }
+    col.into()
+}
+
+fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a, Message> {
+    let active = app.is_working() && index + 1 == app.messages.len();
+    if msg.role == Role::Plan {
+        return plan_line(app, index, msg, active);
+    }
+
+    let header = row![
+        text("Virgo").size(style::T_12).font(style::semibold()),
+        text(app.cfg.executor_model.as_str())
+            .size(style::T_11)
+            .style(style::dim),
+        horizontal_space(),
+        button(icon_manager::label(
+            icon_manager::copy(),
+            "Copy",
+            11,
+            icon_manager::muted()
+        ))
+        .padding([3, 8])
+        .on_press_maybe((!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone())))
+        .style(style::ghost_button),
+    ]
+    .spacing(8)
+    .align_y(Vertical::Center);
+
+    let mut body = column![header].spacing(style::SP_2);
+
+    if !msg.thinking.is_empty() || (active && msg.content.is_empty()) {
+        body = body.push(thinking_header(app, index, msg, active));
+    }
+    if msg.show_thinking && !msg.thinking.is_empty() {
+        body = body.push(
+            container(
+                text(msg.thinking.as_str())
+                    .size(style::T_12)
+                    .style(style::dim),
+            )
+            .padding(10)
+            .width(Length::Fill)
+            .style(style::thinking_box),
+        );
+    }
+    if !msg.content.is_empty() {
+        body = body.push(markdown::view(&msg.content));
+    }
+    if let Some(cards) = super::actions::view(app, index, &msg.content, active) {
+        body = body.push(cards);
+    }
+
+    // Flat on the pane: no box.
+    container(body).width(Length::Fill).padding([4, 0]).into()
+}
+
+fn thinking_header<'a>(
+    app: &'a App,
+    index: usize,
+    msg: &'a ChatMessage,
+    active: bool,
+) -> Element<'a, Message> {
+    let now = active && msg.think_secs.is_none();
+    let label = if now {
+        let secs = app
+            .think_started
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
+        format!("Thinking {secs}s")
+    } else if let Some(secs) = msg.think_secs {
+        format!("Thought for {secs:.1}s")
+    } else {
+        String::new()
+    };
+
+    let mut line = row![text(label).size(style::T_12).style(style::dim)]
+        .spacing(8)
+        .align_y(Vertical::Center);
+    if !msg.thinking.is_empty() {
+        line = line.push(
+            button(text(if msg.show_thinking { "Hide" } else { "Show" }).size(style::T_12))
+                .padding([2, 8])
+                .on_press(Message::ToggleThinking(index))
+                .style(style::ghost_button),
+        );
+    }
+    line.into()
+}
+
+fn welcome<'a>() -> Element<'a, Message> {
+    let starter = |label: &'static str| -> Element<'a, Message> {
+        button(text(label).size(style::T_13))
+            .padding([8, 14])
+            .on_press(Message::InputChanged(label.to_string()))
+            .style(style::ghost_button)
+            .into()
+    };
+    container(
+        column![
+            text("Virgo AI").size(style::T_20).font(style::semibold()),
+            text("Open a project folder in the right panel to chat about your code.")
+                .size(style::T_13)
+                .style(style::dim),
+            row![
+                starter("Explain this project"),
+                starter("Find a bug in my code")
+            ]
+            .spacing(8),
+            row![starter("Write tests"), starter("Suggest a refactor")].spacing(8),
+        ]
+        .spacing(style::SP_3)
+        .align_x(Horizontal::Center),
+    )
+    .width(Length::Fill)
+    .padding(60)
+    .align_x(Horizontal::Center)
     .into()
 }
 
@@ -208,7 +377,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 /// Editable plan with Run / Discard, shown while `app.reviewing`.
 fn plan_review(app: &App) -> Element<'_, Message> {
     let header = row![
-        icon_manager::tint(icon_manager::lightbulb(), 18.0, icon_manager::accent()),
+        icon_manager::tint(icon_manager::lightbulb(), 18.0, icon_manager::muted()),
         column![
             text("Review the plan").size(15).font(style::bold()),
             text("Edit it however you like. The model will follow your version.")
@@ -248,7 +417,7 @@ fn plan_review(app: &App) -> Element<'_, Message> {
     container(column![header, editor, actions].spacing(12))
         .padding(16)
         .width(Length::Fill)
-        .style(style::plan_card)
+        .style(style::card)
         .into()
 }
 
@@ -440,52 +609,6 @@ fn suggestions(app: &App) -> Option<Element<'_, Message>> {
 // Messages
 // ---------------------------------------------------------------------------
 
-/// A starter prompt: clicking it fills the composer (press Enter to send).
-fn starter<'a>(label: &'static str) -> Element<'a, Message> {
-    button(text(label).size(13))
-        .padding([8, 16])
-        .on_press(Message::InputChanged(label.to_string()))
-        .style(style::chip)
-        .into()
-}
-
-fn welcome<'a>() -> Element<'a, Message> {
-    container(
-        column![
-            text("Virgo AI")
-                .size(40)
-                .font(style::bold())
-                .style(style::accent),
-            text(
-                "A planner model thinks it through, an executor model answers, \
-                 and your markdown notes keep the memory. Open a project folder \
-                 in the right panel to chat about your code."
-            )
-            .size(15)
-            .style(style::dim)
-            .width(Length::Fill)
-            .align_x(Horizontal::Center),
-            column![
-                row![
-                    starter("Explain this project"),
-                    starter("Find a bug in my code")
-                ]
-                .spacing(8),
-                row![starter("Write tests"), starter("Suggest a refactor")].spacing(8),
-            ]
-            .spacing(8)
-            .align_x(Horizontal::Center),
-        ]
-        .spacing(18)
-        .align_x(Horizontal::Center)
-        .max_width(520),
-    )
-    .width(Length::Fill)
-    .padding(60)
-    .align_x(Horizontal::Center)
-    .into()
-}
-
 fn bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a, Message> {
     match msg.role {
         Role::User => {
@@ -519,127 +642,4 @@ fn bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a, M
         .into(),
         Role::Plan | Role::Assistant => ai_bubble(app, index, msg),
     }
-}
-
-fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a, Message> {
-    let is_plan = msg.role == Role::Plan;
-    let (label, model) = if is_plan {
-        ("Plan", app.cfg.planner_model.as_str())
-    } else {
-        ("Virgo", app.cfg.executor_model.as_str())
-    };
-
-    // Is this the bubble the model is writing into right now?
-    let active = app.is_working() && index + 1 == app.messages.len();
-
-    let header = row![
-        text(label)
-            .size(12)
-            .font(style::bold())
-            .style(style::accent),
-        text(model).size(11).style(style::dim),
-        horizontal_space(),
-        button(icon_manager::label(
-            icon_manager::copy(),
-            "Copy",
-            11,
-            icon_manager::muted()
-        ))
-        .padding([3, 10])
-        .on_press_maybe((!msg.content.is_empty()).then(|| Message::Copy(msg.content.clone())))
-        .style(style::ghost_button),
-    ]
-    .spacing(8)
-    .align_y(Vertical::Center);
-
-    let mut body = column![header].spacing(10);
-
-    // "Thinking..." status while waiting, or "Thought for Ns" afterwards.
-    if !msg.thinking.is_empty() || (active && msg.content.is_empty()) {
-        body = body.push(thinking_header(app, index, msg, active));
-    }
-    if msg.show_thinking && !msg.thinking.is_empty() {
-        body = body.push(
-            container(text(msg.thinking.as_str()).size(12).style(style::dim))
-                .padding(10)
-                .width(Length::Fill)
-                .style(style::thinking_box),
-        );
-    }
-    if !msg.content.is_empty() {
-        body = body.push(markdown::view(&msg.content));
-    }
-
-    // Edit / run cards, shown live while streaming (completed blocks only).
-    if msg.role == Role::Assistant {
-        if let Some(cards) = super::actions::view(app, index, &msg.content, active) {
-            body = body.push(cards);
-        }
-    }
-
-    // Plans stay boxed; assistant replies sit flat on the background.
-    let pad: u16 = if is_plan { 14 } else { 4 };
-    container(body)
-        .padding(pad)
-        .width(Length::Fill)
-        .style(move |theme: &Theme| {
-            if is_plan {
-                style::plan_card(theme)
-            } else {
-                container::Style::default()
-            }
-        })
-        .into()
-}
-
-fn thinking_header<'a>(
-    app: &'a App,
-    index: usize,
-    msg: &'a ChatMessage,
-    active: bool,
-) -> Element<'a, Message> {
-    let thinking_now = active && msg.think_secs.is_none();
-
-    let label = if thinking_now {
-        let secs = app
-            .think_started
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
-        if msg.thinking.is_empty() {
-            format!("Thinking{}", dots(app.tick))
-        } else {
-            format!("Thinking{}  {secs}s", dots(app.tick))
-        }
-    } else if let Some(secs) = msg.think_secs {
-        format!("Thought for {secs:.1}s")
-    } else {
-        String::new()
-    };
-
-    let mut line = row![text(label).size(13).style(move |theme: &Theme| {
-        if thinking_now {
-            style::accent(theme)
-        } else {
-            style::dim(theme)
-        }
-    })]
-    .spacing(8)
-    .align_y(Vertical::Center);
-
-    if !msg.thinking.is_empty() {
-        let toggle = if msg.show_thinking { "Hide" } else { "Show" };
-        line = line.push(
-            button(text(toggle).size(12))
-                .padding([3, 10])
-                .on_press(Message::ToggleThinking(index))
-                .style(style::ghost_button),
-        );
-    }
-    line.into()
-}
-
-/// Animated dots with a fixed width, so the label does not jitter.
-fn dots(tick: u32) -> String {
-    let n = (tick % 4) as usize;
-    format!("{}{}", ".".repeat(n), " ".repeat(3 - n))
 }

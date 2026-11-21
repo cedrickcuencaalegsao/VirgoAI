@@ -92,7 +92,7 @@ pub fn view(app: &App) -> Option<Element<'_, Message>> {
         container(body)
             .padding(12)
             .width(Length::Fill)
-            .style(style::plan_card)
+            .style(style::card)
             .into(),
     )
 }

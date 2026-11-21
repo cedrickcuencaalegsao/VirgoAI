@@ -69,7 +69,7 @@ pub fn accent() -> Color {
 
 /// Text colour on primary (violet) buttons.
 pub fn on_primary() -> Color {
-    style::on_gold()
+    style::on_signal()
 }
 
 /// Text colour on danger (red) buttons.

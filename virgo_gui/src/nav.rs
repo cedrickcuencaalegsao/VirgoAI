@@ -1,5 +1,5 @@
 use iced::alignment::Vertical;
-use iced::widget::{button, column, container, row, scrollable, text, Space, Svg};
+use iced::widget::{Space, Svg, button, column, container, row, scrollable, text};
 use iced::{Element, Length};
 
 use super::short;
@@ -44,8 +44,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
             Screen::Projects,
             projects_current
         ),
-        item(icon_manager::message_square(), "Chat", Screen::Chat, app.screen),
-        item(icon_manager::database(), "Memory", Screen::Memory, app.screen),
+        item(
+            icon_manager::message_square(),
+            "Chat",
+            Screen::Chat,
+            app.screen
+        ),
+        item(
+            icon_manager::database(),
+            "Memory",
+            Screen::Memory,
+            app.screen
+        ),
         item(
             icon_manager::sliders_horizontal(),
             "Settings",
@@ -59,12 +69,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let projects: Element<'_, Message> = if app.workspaces.is_empty() {
         text("No projects yet").size(12).style(style::dim).into()
     } else {
-        scrollable(
-            column(app.workspaces.iter().map(|w| project_block(app, w))).spacing(2),
-        )
-        .style(style::scroll)
-        .height(Length::Fill)
-        .into()
+        scrollable(column(app.workspaces.iter().map(|w| project_block(app, w))).spacing(2))
+            .style(style::scroll)
+            .height(Length::Fill)
+            .into()
     };
 
     // ---- general chats only (never project conversations) ----
@@ -85,40 +93,15 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .into()
     };
 
-    // ---- models in use (small recessed box) ----
-    let planner = if app.cfg.use_planner {
-        app.cfg.planner_model.as_str()
-    } else {
-        "off"
-    };
-    let project = app
-        .chat_workspace_name()
-        .unwrap_or_else(|| "none".to_string());
-    let models = container(
-        column![
-            text("CHAT PROJECT").size(10).style(style::dim),
-            text(short(&project, 24)).size(13),
-            text("PLANNER").size(10).style(style::dim),
-            text(planner).size(13),
-            text("EXECUTOR").size(10).style(style::dim),
-            text(app.cfg.executor_model.as_str()).size(13),
-        ]
-        .spacing(2),
-    )
-    .padding(style::SP_3)
-    .width(Length::Fill)
-    .style(style::inset);
-
     container(
         column![
             brand,
             new_chat,
             items,
-            text("PROJECTS").size(10).style(style::dim),
+            text("Projects").size(10).style(style::dim),
             container(projects).height(Length::FillPortion(1)),
-            text("RECENT CHATS").size(10).style(style::dim),
+            text("Recent Chats").size(10).style(style::dim),
             container(recent).height(Length::FillPortion(1)),
-            models,
         ]
         .spacing(style::SP_4)
         .padding(style::SP_6 - 4.0),
@@ -144,7 +127,7 @@ fn item<'a>(
 ) -> Element<'a, Message> {
     let active = target == current;
     let color = if active {
-        icon_manager::accent()
+        style::text_color()
     } else {
         icon_manager::muted()
     };
@@ -152,7 +135,7 @@ fn item<'a>(
     row![
         indicator(active),
         button(icon_manager::label(icon, label, 14, color))
-            .width(Length::Fill)
+            .width(Length::Fixed(2.0))
             .padding([10, 14])
             .on_press(Message::Navigate(target))
             .style(style::nav_item(active)),
@@ -167,8 +150,8 @@ fn item<'a>(
 fn project_block<'a>(app: &'a App, w: &'a Workspace) -> Element<'a, Message> {
     let expanded = app.selected_workspace.as_deref() == Some(w.slug.as_str())
         || app.chat_workspace().as_deref() == Some(w.slug.as_str());
-    let active = app.screen == Screen::Project
-        && app.selected_workspace.as_deref() == Some(w.slug.as_str());
+    let active =
+        app.screen == Screen::Project && app.selected_workspace.as_deref() == Some(w.slug.as_str());
 
     let icon = if expanded {
         icon_manager::tint(icon_manager::folder_open(), 14.0, icon_manager::accent())
@@ -214,10 +197,14 @@ fn chat_row<'a>(app: &'a App, id: &'a str, title: &str) -> Element<'a, Message> 
             .padding([7, 10])
             .on_press_maybe(enabled.then(|| Message::OpenChat(id.to_string())))
             .style(style::nav_item(active)),
-        button(icon_manager::tint(icon_manager::trash_2(), 14.0, icon_manager::muted()))
-            .padding([7, 8])
-            .on_press_maybe(enabled.then(|| Message::DeleteChat(id.to_string())))
-            .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::trash_2(),
+            14.0,
+            icon_manager::muted()
+        ))
+        .padding([7, 8])
+        .on_press_maybe(enabled.then(|| Message::DeleteChat(id.to_string())))
+        .style(style::ghost_button),
     ]
     .spacing(2)
     .into()

@@ -3,10 +3,10 @@
 
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::{
-    button, canvas, column, container, horizontal_space, row, scrollable, text, text_editor,
-    text_input, Space,
+    Space, button, canvas, column, container, horizontal_space, row, scrollable, text, text_editor,
+    text_input,
 };
-use iced::{event, mouse, Color, Element, Length, Point, Rectangle, Renderer, Size, Theme};
+use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size, Theme, event, mouse};
 
 use memory::graph::{Graph, Node};
 
@@ -40,14 +40,20 @@ fn notes_panel(app: &App) -> Element<'_, Message> {
     let header = row![
         column![
             text("Memory").size(22).font(style::bold()),
-            text("Markdown notes on your SSD").size(12).style(style::dim),
+            text("Markdown notes on your SSD")
+                .size(12)
+                .style(style::dim),
         ]
         .spacing(2),
         horizontal_space(),
-        button(icon_manager::tint(icon_manager::refresh_cw(), 16.0, icon_manager::muted()))
-            .padding(8)
-            .on_press(Message::ReloadNotes)
-            .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::refresh_cw(),
+            16.0,
+            icon_manager::muted()
+        ))
+        .padding(8)
+        .on_press(Message::ReloadNotes)
+        .style(style::ghost_button),
     ]
     .align_y(Vertical::Center);
 
@@ -57,8 +63,12 @@ fn notes_panel(app: &App) -> Element<'_, Message> {
         .size(13)
         .style(style::field);
 
-    let mut chips = row![chip("All", app.memory_filter.is_none(), Message::MemoryFilter(None))]
-        .spacing(6);
+    let mut chips = row![chip(
+        "All",
+        app.memory_filter.is_none(),
+        Message::MemoryFilter(None)
+    )]
+    .spacing(6);
     for (i, name) in app.memory_graph.groups.iter().enumerate().take(4) {
         chips = chips.push(chip(
             name.as_str(),
@@ -74,10 +84,15 @@ fn notes_panel(app: &App) -> Element<'_, Message> {
             .padding(9)
             .size(13)
             .style(style::field),
-        button(icon_manager::label(icon_manager::plus(), "Add", 13, icon_manager::on_primary()))
-            .padding([9, 14])
-            .on_press(Message::CreateNote)
-            .style(style::primary_button),
+        button(icon_manager::label(
+            icon_manager::plus(),
+            "Add",
+            13,
+            icon_manager::on_primary()
+        ))
+        .padding([9, 14])
+        .on_press(Message::CreateNote)
+        .style(style::primary_button),
     ]
     .spacing(6);
 
@@ -100,11 +115,7 @@ fn notes_panel(app: &App) -> Element<'_, Message> {
 }
 
 fn chip(label: &str, active: bool, message: Message) -> Element<'_, Message> {
-    button(text(label).size(12))
-        .padding([4, 12])
-        .on_press(message)
-        .style(style::filter_chip(active))
-        .into()
+    super::tab(label, active, message)
 }
 
 fn dot<'a>(color: Color) -> Element<'a, Message> {
@@ -304,7 +315,7 @@ impl canvas::Program<Message> for MapProgram<'_> {
         let size = bounds.size();
         let mut frame = canvas::Frame::new(renderer, size);
         let nodes = &self.graph.nodes;
-        let gold = style::gold();
+        let gold = style::signal();
         let text_color = style::palette().text;
 
         // Dotted background grid (one path, one fill).
@@ -352,7 +363,10 @@ impl canvas::Program<Message> for MapProgram<'_> {
             let emphasised = focus == Some(i);
 
             if emphasised {
-                frame.fill(&canvas::Path::circle(c, r + 12.0), style::alpha(color, 0.12));
+                frame.fill(
+                    &canvas::Path::circle(c, r + 12.0),
+                    style::alpha(color, 0.12),
+                );
                 frame.fill(&canvas::Path::circle(c, r + 6.0), style::alpha(color, 0.20));
             }
             frame.fill(
@@ -470,10 +484,14 @@ fn inspector<'a>(app: &'a App, name: &'a str) -> Element<'a, Message> {
         ]
         .spacing(1),
         horizontal_space(),
-        button(icon_manager::tint(icon_manager::x(), 14.0, icon_manager::muted()))
-            .padding(6)
-            .on_press(Message::MemoryClose)
-            .style(style::ghost_button),
+        button(icon_manager::tint(
+            icon_manager::x(),
+            14.0,
+            icon_manager::muted()
+        ))
+        .padding(6)
+        .on_press(Message::MemoryClose)
+        .style(style::ghost_button),
     ]
     .spacing(10)
     .align_y(Vertical::Center);
@@ -502,14 +520,24 @@ fn inspector<'a>(app: &'a App, name: &'a str) -> Element<'a, Message> {
     }
 
     let actions = row![
-        button(icon_manager::label(icon_manager::check(), "Save", 13, icon_manager::on_primary()))
-            .padding([8, 18])
-            .on_press(Message::SaveNote)
-            .style(style::primary_button),
-        button(icon_manager::label(icon_manager::trash_2(), "Delete", 13, icon_manager::on_danger()))
-            .padding([8, 18])
-            .on_press(Message::DeleteNote)
-            .style(style::danger_button),
+        button(icon_manager::label(
+            icon_manager::check(),
+            "Save",
+            13,
+            icon_manager::on_primary()
+        ))
+        .padding([8, 18])
+        .on_press(Message::SaveNote)
+        .style(style::primary_button),
+        button(icon_manager::label(
+            icon_manager::trash_2(),
+            "Delete",
+            13,
+            icon_manager::on_danger()
+        ))
+        .padding([8, 18])
+        .on_press(Message::DeleteNote)
+        .style(style::danger_button),
     ]
     .spacing(8);
 

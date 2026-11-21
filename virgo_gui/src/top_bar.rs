@@ -1,10 +1,9 @@
-use iced::Element;
 use iced::alignment::Vertical;
-use iced::widget::{button, column, container, horizontal_space, row, text};
+use iced::widget::{Space, button, column, container, horizontal_space, row, text};
+use iced::{Element, Length};
 
 use super::short;
 use app::{App, Message, Phase, Screen};
-use style::StageState::{self, Done, Idle, Live};
 
 const NAMES: [&str; 5] = ["Scout", "Plan", "Review", "Execute", "Verify"];
 
@@ -23,25 +22,20 @@ fn current(app: &App) -> Option<usize> {
     }
 }
 
-fn strip(app: &App) -> Element<'_, Message> {
-    let cur = current(app);
-    let mut r = row![].spacing(6).align_y(Vertical::Center);
-
-    for (i, name) in NAMES.iter().enumerate() {
-        let state: StageState = match cur {
-            Some(c) if i < c => Done,
-            Some(c) if i == c => Live,
-            _ => Idle,
-        };
-        let (mark, color) = match state {
-            Live => (if app.tick % 2 == 0 { "●" } else { "○" }, style::live()),
-            Done => ("✓", style::palette().text),
-            Idle => ("○", style::dim_color()),
+/// 2px line: done = text colour, current = signal, upcoming = line colour.
+fn progress(app: &App, cur: Option<usize>) -> Element<'_, Message> {
+    let _ = app;
+    let mut r = row![].height(Length::Fixed(2.0));
+    for i in 0..NAMES.len() {
+        let color = match cur {
+            Some(c) if i < c => style::text_color(),
+            Some(c) if i == c => style::signal(),
+            _ => style::line(),
         };
         r = r.push(
-            container(text(format!("{mark} {name}")).size(12).color(color))
-                .padding([4, 10])
-                .style(style::stage(state)),
+            container(Space::new(Length::Fill, Length::Fixed(2.0)))
+                .width(Length::FillPortion(1))
+                .style(style::segment(color)),
         );
     }
     r.into()
@@ -54,27 +48,27 @@ pub fn view(app: &App) -> Element<'_, Message> {
         Screen::Memory => "Memory",
         Screen::Settings => "Settings",
     };
-    let subtitle = match (app.screen, app.chat_workspace_name()) {
-        (Screen::Chat, Some(name)) => format!("Project: {name}"),
-        (Screen::Chat, None) => "No project".to_string(),
-        _ => String::new(),
-    };
-
-    let left = column![
-        text(title).size(18).font(style::bold()),
-        text(short(&subtitle, 40)).size(12).style(style::dim),
-    ]
-    .spacing(2);
-
-    let middle: Element<'_, Message> = if app.screen == Screen::Chat {
-        strip(app)
+    let cur = if app.screen == Screen::Chat {
+        current(app)
     } else {
-        horizontal_space().into()
+        None
     };
+
+    let mut left = row![text(title).size(style::T_20).font(style::semibold())]
+        .spacing(style::SP_3)
+        .align_y(Vertical::Center);
+    if let Some(c) = cur {
+        left = left.push(text(NAMES[c]).size(style::T_13).style(style::dim));
+    }
+    if app.screen == Screen::Chat {
+        if let Some(name) = app.chat_workspace_name() {
+            left = left.push(text(short(&name, 32)).size(style::T_12).style(style::dim));
+        }
+    }
 
     let right = row![
-        button(text("Search  ⌘K").size(12))
-            .padding([6, 12])
+        button(text("Search  ⌘K").size(style::T_12))
+            .padding([6, 10])
             .on_press(Message::TogglePalette)
             .style(style::ghost_button),
         button(icon_manager::tint(
@@ -94,12 +88,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .on_press(Message::TogglePanel)
         .style(style::ghost_button),
     ]
-    .spacing(4)
+    .spacing(style::SP_1)
     .align_y(Vertical::Center);
 
-    row![left, horizontal_space(), middle, horizontal_space(), right]
-        .spacing(12)
-        .padding([10, 14])
-        .align_y(Vertical::Center)
-        .into()
+    column![
+        row![left, horizontal_space(), right]
+            .padding([10, 16])
+            .align_y(Vertical::Center),
+        progress(app, cur),
+    ]
+    .into()
 }

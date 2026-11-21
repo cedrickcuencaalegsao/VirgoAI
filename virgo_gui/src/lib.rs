@@ -25,3 +25,38 @@ pub fn short(text: &str, max: usize) -> String {
         format!("{head}...")
     }
 }
+
+use iced::widget::{Space, button, column, container, text};
+use iced::{Element, Length};
+
+use app::Message;
+
+pub fn vdivider<'a, M: 'a>() -> Element<'a, M> {
+    container(Space::new(Length::Fixed(1.0), Length::Fill))
+        .width(Length::Fixed(1.0))
+        .height(Length::Fill)
+        .style(style::divider)
+        .into()
+}
+
+pub fn hdivider<'a, M: 'a>() -> Element<'a, M> {
+    container(Space::new(Length::Fill, Length::Fixed(1.0)))
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(style::divider)
+        .into()
+}
+
+/// Plain text tab; the active one has a 2px signal underline.
+pub fn tab<'a>(label: &'a str, active: bool, message: Message) -> Element<'a, Message> {
+    column![
+        button(text(label).size(style::T_12))
+            .padding([5, 10])
+            .on_press(message)
+            .style(style::tab_button(active)),
+        container(Space::new(Length::Fill, Length::Fixed(2.0)))
+            .width(Length::Fill)
+            .style(style::underline(active)),
+    ]
+    .into()
+}

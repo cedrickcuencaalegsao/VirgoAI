@@ -1,25 +1,22 @@
-//! Middle panel: the open file with a suggestion button on every line.
-//! AI changes show as red (original) and green (new) rows until accepted or rejected.
-//!
-//! Only the rows near the scroll position are built, so big files stay fast.
+//! The hero. Rows are exactly ROW_H tall (23px content + a 1px rule), so
+//! windowing and scroll maths stay exact. Changed rows: 14% fill + 2px edge.
 
 use iced::alignment::{Horizontal, Vertical};
 use iced::font::{Style as FontStyle, Weight};
 use iced::widget::text_editor::{Binding, Status};
 use iced::widget::{
-    Space, Svg, button, column, container, horizontal_space, row, scrollable, text, text_input,
+    Row, Space, Svg, button, column, container, horizontal_space, mouse_area, row, scrollable,
+    text, text_input,
 };
 use iced::widget::{rich_text, span, text_editor};
 use iced::{Color, keyboard};
-use iced::{Element, Font, Length, Theme};
+use iced::{Element, Length, Theme};
 
 use super::short;
 use app::{App, Message};
 use code::{self, CodeDoc, RowKind, RowRef};
 
-/// Every row has exactly this height, which is what makes windowing possible.
 const ROW_H: f32 = 24.0;
-/// Extra rows built above and below the visible area.
 const OVERSCAN: usize = 12;
 const GUTTER_W: f32 = 40.0;
 const MARKER_W: f32 = 12.0;
@@ -46,18 +43,13 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
         None => ("", doc.rel.as_str()),
     };
 
-    // ---- header ----
     let header = row![
-        icon_manager::tint(icon_manager::file_text(), 18.0, icon_manager::accent()),
+        icon_manager::tint(icon_manager::file_text(), 16.0, icon_manager::muted()),
         column![
-            text(name).size(15).font(style::bold()),
-            text(if dir.is_empty() {
-                "(project root)"
-            } else {
-                dir
-            })
-            .size(11)
-            .style(style::dim),
+            text(name).size(style::T_15).font(style::semibold()),
+            text(if dir.is_empty() { "project root" } else { dir })
+                .size(style::T_11)
+                .style(style::dim),
         ]
         .spacing(1),
         horizontal_space(),
@@ -65,76 +57,78 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
         icon_button(icon_manager::refresh_cw(), Message::ReloadCode),
         icon_button(icon_manager::x(), Message::CloseCode),
     ]
-    .spacing(10)
+    .spacing(style::SP_3)
     .align_y(Vertical::Center);
 
     if app.is_editing() {
         return edit_panel(app, doc, header.into());
     }
 
-    // ---- review toolbar ----
+    // ---- toolbar: "3 changes in main.rs" ... Reject all, Accept ----
     let pending = doc.change_count();
     let live = doc.is_live();
 
     let summary: Element<'a, Message> = if live {
-        text("AI is editing this file...")
-            .size(12)
-            .style(style::accent)
-            .into()
-    } else if pending == 0 {
-        text("Click the bulb on a line to ask the model for a change.")
-            .size(12)
+        text("AI is editing this file")
+            .size(style::T_12)
             .style(style::dim)
             .into()
-    } else {
+    } else if pending > 0 {
         text(format!(
-            "{pending} AI change(s) pending. Accept or reject each one."
+            "{pending} change{} in {name}",
+            if pending == 1 { "" } else { "s" }
         ))
-        .size(12)
-        .style(style::success)
+        .size(style::T_13)
         .into()
-    };
-
-    let stop: Element<'a, Message> = if app.is_working() && live {
-        button(text("Stop").size(12))
-            .padding([6, 10])
-            .on_press(Message::Stop)
-            .style(style::ghost_button)
-            .into()
     } else {
-        Space::with_width(Length::Shrink).into()
+        text("Hover a line and click the bulb to ask for a change.")
+            .size(style::T_12)
+            .style(style::dim)
+            .into()
     };
 
-    let toolbar = row![
-        container(summary).width(Length::Fill),
-        stop,
-        button(icon_manager::label(
-            icon_manager::undo_2(),
-            "Undo",
-            12,
-            icon_manager::muted()
-        ))
-        .padding([6, 10])
-        .on_press_maybe(doc.can_undo().then_some(Message::UndoApply))
-        .style(style::ghost_button),
-        button(text("Reject all").size(12))
-            .padding([6, 10])
-            .on_press_maybe((pending > 0).then_some(Message::DiscardEdits))
-            .style(style::ghost_button),
-        button(icon_manager::label(
-            icon_manager::check(),
-            format!("Accept all ({pending})"),
-            13,
-            icon_manager::on_primary()
-        ))
-        .padding([7, 14])
-        .on_press_maybe((pending > 0 && !live).then_some(Message::ApplyEdits))
-        .style(style::primary_button),
-    ]
-    .spacing(6)
-    .align_y(Vertical::Center);
+    let mut toolbar = row![container(summary).width(Length::Fill)]
+        .spacing(style::SP_2)
+        .align_y(Vertical::Center);
 
-    // ---- code rows (only the visible window is built) ----
+    if app.is_working() && live {
+        toolbar = toolbar.push(
+            button(text("Stop").size(style::T_12))
+                .padding([6, 10])
+                .on_press(Message::Stop)
+                .style(style::ghost_button),
+        );
+    }
+    if doc.can_undo() {
+        toolbar = toolbar.push(
+            button(icon_manager::label(
+                icon_manager::undo_2(),
+                "Undo",
+                12,
+                icon_manager::muted(),
+            ))
+            .padding([6, 10])
+            .on_press(Message::UndoApply)
+            .style(style::ghost_button),
+        );
+    }
+    if pending > 0 && !live {
+        toolbar = toolbar
+            .push(
+                button(text("Reject all").size(style::T_12))
+                    .padding([6, 10])
+                    .on_press(Message::DiscardEdits)
+                    .style(style::ghost_button),
+            )
+            .push(
+                button(text("Accept").size(style::T_13))
+                    .padding([6, 14])
+                    .on_press(Message::ApplyEdits)
+                    .style(style::primary_button),
+            );
+    }
+
+    // ---- rows (only the visible window is built) ----
     let rows = doc.rows();
     let total = rows.len();
     let first = ((app.code_scroll_y / ROW_H) as usize)
@@ -160,36 +154,36 @@ fn panel<'a>(app: &'a App, doc: &'a CodeDoc) -> Element<'a, Message> {
                 horizontal: scrollable::Scrollbar::default(),
             })
             .on_scroll(Message::CodeScrolled)
+            .style(style::scroll)
             .width(Length::Fill)
             .height(Length::Fill),
     )
-    .padding(4)
     .width(Length::Fill)
     .height(Length::Fill)
     .style(style::code_area);
 
-    let mut page = column![header, toolbar, area].spacing(10);
+    let mut page = column![header, toolbar, area].spacing(style::SP_3);
     if let Some(bar) = suggest_bar(app, doc) {
         page = page.push(bar);
     }
 
     container(page)
-        .padding(14)
+        .padding(style::SP_4)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(style::card)
         .into()
 }
 
 fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message> {
     let kind = r.kind;
     let selected = app.suggest_line == Some(r.line) && kind != RowKind::Added;
+    let hovered = app.hover_line == Some(r.line) && kind != RowKind::Added;
     let busy = app.suggesting.is_some();
 
     let number = r.number.map(|n| n.to_string()).unwrap_or_default();
     let gutter = text(number)
-        .size(12)
-        .font(Font::MONOSPACE)
+        .size(style::T_12)
+        .font(style::mono())
         .style(style::dim)
         .width(Length::Fixed(GUTTER_W))
         .align_x(Horizontal::Right);
@@ -199,15 +193,14 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
         RowKind::Removed => text("-").style(style::danger_text),
         RowKind::Normal => text(" "),
     }
-    .size(13)
-    .font(Font::MONOSPACE)
+    .size(style::T_13)
+    .font(style::mono())
     .width(Length::Fixed(MARKER_W));
 
+    // Actions column keeps its width, so nothing shifts when the bulb appears.
     let actions: Element<'a, Message> = if let (Some(h), RowKind::Removed) = (r.hunk, kind) {
-        // First row of a model change: accept / reject the whole hunk.
         if h == code::LIVE_ID {
-            // The model is still typing it.
-            container(text("...").size(12).style(style::dim))
+            container(text("...").size(style::T_12).style(style::dim))
                 .width(Length::Fixed(ACTIONS_W))
                 .into()
         } else {
@@ -215,7 +208,7 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
                 button(icon_manager::tint(
                     icon_manager::check(),
                     13.0,
-                    style::palette().success
+                    style::success_color()
                 ))
                 .padding([5, 6])
                 .on_press(Message::AcceptHunk(h))
@@ -233,22 +226,20 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
             .into()
         }
     } else if r.show_actions {
-        // Suggest (bulb) on every line; revert on lines with a single-line suggestion.
-        let bulb_color = if selected {
-            icon_manager::accent()
-        } else {
-            icon_manager::muted()
-        };
-        let mut buttons = row![
-            button(icon_manager::tint(
-                icon_manager::lightbulb(),
-                13.0,
-                bulb_color
-            ))
-            .padding([5, 6])
-            .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
-            .style(style::ghost_button)
-        ];
+        let mut buttons: Row<'a, Message> = Row::new();
+        if selected || hovered {
+            let color = if selected {
+                style::text_color()
+            } else {
+                icon_manager::muted()
+            };
+            buttons = buttons.push(
+                button(icon_manager::tint(icon_manager::lightbulb(), 13.0, color))
+                    .padding([5, 6])
+                    .on_press_maybe((!busy).then_some(Message::SuggestLine(r.line)))
+                    .style(style::ghost_button),
+            );
+        }
         if kind == RowKind::Removed {
             buttons = buttons.push(
                 button(icon_manager::tint(
@@ -269,54 +260,77 @@ fn code_row<'a>(app: &'a App, r: &RowRef<'_>, width: f32) -> Element<'a, Message
     let code: Element<'a, Message> = match r.spans {
         Some(spans) if !spans.is_empty() => colored(spans, width),
         _ => text(code::display(r.src))
-            .size(13)
-            .font(Font::MONOSPACE)
+            .size(style::T_13)
+            .font(style::mono())
             .width(Length::Fixed(width))
             .into(),
     };
 
-    container(
+    let edge: Element<'a, Message> = match kind {
+        RowKind::Added => container(Space::new(Length::Fixed(2.0), Length::Fill))
+            .style(style::edge(style::success_color()))
+            .into(),
+        RowKind::Removed => container(Space::new(Length::Fixed(2.0), Length::Fill))
+            .style(style::edge(style::danger_color()))
+            .into(),
+        RowKind::Normal => Space::with_width(Length::Fixed(2.0)).into(),
+    };
+
+    let content = row![
+        edge,
         row![gutter, marker, actions, code]
             .spacing(4)
+            .padding([0, 6])
             .align_y(Vertical::Center),
-    )
-    .height(Length::Fixed(ROW_H))
-    .padding([0, 6])
-    .style(move |theme: &Theme| match kind {
-        RowKind::Added => style::row_added(theme),
-        RowKind::Removed => style::row_removed(theme),
-        RowKind::Normal if selected => style::row_selected(theme),
-        RowKind::Normal => container::Style::default(),
-    })
-    .into()
+    ]
+    .height(Length::Fill)
+    .align_y(Vertical::Center);
+
+    let body = container(content)
+        .width(Length::Fill)
+        .height(Length::Fixed(ROW_H - 1.0))
+        .style(move |theme: &Theme| match kind {
+            RowKind::Added => style::row_added(theme),
+            RowKind::Removed => style::row_removed(theme),
+            RowKind::Normal => container::Style::default(),
+        });
+
+    // The current line is marked by a 1px line under it, not a fill.
+    let rule_style: fn(&Theme) -> container::Style = if selected {
+        style::divider
+    } else {
+        style::clear
+    };
+    let rule = container(Space::new(Length::Fill, Length::Fixed(1.0)))
+        .width(Length::Fill)
+        .height(Length::Fixed(1.0))
+        .style(rule_style);
+
+    mouse_area(column![body, rule])
+        .on_enter(Message::HoverLine(Some(r.line)))
+        .on_exit(Message::HoverLeave(r.line))
+        .into()
 }
 
-/// Shown after clicking a bulb: ask the model what to do with that line.
 fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message>> {
     let line = app.suggest_line?;
     let current = doc.lines.get(line)?;
     let waiting = app.suggesting.is_some();
 
     let top = row![
-        icon_manager::tint(icon_manager::lightbulb(), 15.0, icon_manager::accent()),
         text(format!("Line {}", line + 1))
-            .size(13)
-            .font(style::bold()),
+            .size(style::T_13)
+            .font(style::semibold()),
         text(short(current.trim(), 48))
-            .size(12)
-            .font(Font::MONOSPACE)
+            .size(style::T_12)
+            .font(style::mono())
             .style(style::dim),
         horizontal_space(),
         icon_button(icon_manager::x(), Message::CancelSuggest),
     ]
-    .spacing(8)
+    .spacing(style::SP_2)
     .align_y(Vertical::Center);
 
-    let action_label = if waiting {
-        "Asking model..."
-    } else {
-        "Suggest"
-    };
     let input = row![
         text_input(
             "How should this line change? (empty = improve it)",
@@ -325,38 +339,47 @@ fn suggest_bar<'a>(app: &'a App, doc: &'a CodeDoc) -> Option<Element<'a, Message
         .on_input(Message::SuggestInputChanged)
         .on_submit(Message::SubmitSuggestion)
         .padding(9)
-        .size(13)
+        .size(style::T_13)
         .style(style::field),
-        button(icon_manager::label(
-            icon_manager::lightbulb(),
-            action_label,
-            13,
-            icon_manager::on_primary()
-        ))
+        // Ghost, so the pane keeps a single signal element (Accept).
+        button(
+            text(if waiting {
+                "Asking model..."
+            } else {
+                "Suggest"
+            })
+            .size(style::T_13)
+        )
         .padding([8, 14])
         .on_press_maybe((!waiting).then_some(Message::SubmitSuggestion))
-        .style(style::primary_button),
+        .style(style::ghost_button),
     ]
     .spacing(6);
 
-    let footer = text(format!("Uses {}", app.cfg.executor_model))
-        .size(11)
-        .style(style::dim);
-
     Some(
-        container(column![top, input, footer].spacing(8))
-            .padding(10)
-            .width(Length::Fill)
-            .style(style::card)
-            .into(),
+        container(
+            column![
+                top,
+                input,
+                text(format!("Uses {}", app.cfg.executor_model))
+                    .size(style::T_11)
+                    .style(style::dim)
+            ]
+            .spacing(style::SP_2),
+        )
+        .padding(style::SP_3)
+        .width(Length::Fill)
+        .style(style::card)
+        .into(),
     )
 }
 
+/// Syntax colours, muted so changed rows read first.
 fn colored<'a>(spans: &[syntax::Span], width: f32) -> Element<'a, Message> {
     let pieces: Vec<_> = spans
         .iter()
         .map(|s| {
-            let mut font = Font::MONOSPACE;
+            let mut font = style::mono();
             if s.bold {
                 font.weight = Weight::Bold;
             }
@@ -364,16 +387,17 @@ fn colored<'a>(spans: &[syntax::Span], width: f32) -> Element<'a, Message> {
                 font.style = FontStyle::Italic;
             }
             span(s.text.replace('\t', "    "))
-                .color(Color::from_rgb8(s.color[0], s.color[1], s.color[2]))
+                .color(style::mute(Color::from_rgb8(
+                    s.color[0], s.color[1], s.color[2],
+                )))
                 .font(font)
         })
         .collect();
-    container(rich_text(pieces).size(13).font(Font::MONOSPACE))
+    container(rich_text(pieces).size(style::T_13).font(style::mono()))
         .width(Length::Fixed(width))
         .into()
 }
 
-/// Plain text-editor mode: highlighting, typing, Format and Save.
 fn edit_panel<'a>(
     app: &'a App,
     doc: &'a CodeDoc,
@@ -384,7 +408,7 @@ fn edit_panel<'a>(
 
     let toolbar = row![
         text(if dirty { "Unsaved changes" } else { "Editing" })
-            .size(12)
+            .size(style::T_12)
             .style(state),
         horizontal_space(),
         button(icon_manager::label(
@@ -414,7 +438,7 @@ fn edit_panel<'a>(
         .padding([7, 14])
         .on_press_maybe(dirty.then_some(Message::SaveCode))
         .style(style::primary_button),
-        button(text("Done").size(12))
+        button(text("Done").size(style::T_12))
             .padding([6, 10])
             .on_press(Message::ToggleEdit)
             .style(style::ghost_button),
@@ -436,16 +460,15 @@ fn edit_panel<'a>(
                 Binding::from_key_press(kp)
             }
         })
-        .font(Font::MONOSPACE)
-        .size(13)
+        .font(style::mono())
+        .size(style::T_13)
         .padding(12)
         .height(Length::Fill)
         .style(style::code_editor);
 
-    container(column![header, toolbar, editor].spacing(10))
-        .padding(14)
+    container(column![header, toolbar, editor].spacing(style::SP_3))
+        .padding(style::SP_4)
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(style::card)
         .into()
 }

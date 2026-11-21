@@ -227,6 +227,10 @@ pub enum Message {
     PaletteRun(Command),
     SetDock(Dock),
     Flush,
+
+    HoverLine(Option<usize>),
+    HoverLeave(usize),
+    TogglePlan(usize),
 }
 
 pub struct App {
@@ -360,6 +364,9 @@ pub struct App {
     stream_buf: String, // coalesced tokens
 
     evidence: String,
+
+    pub hover_line: Option<usize>,
+    pub plan_open: HashSet<usize>,
 }
 
 impl App {
@@ -464,6 +471,8 @@ impl App {
             palette_query: String::new(),
             stream_buf: String::new(),
             evidence: String::new(),
+            hover_line: None,
+            plan_open: HashSet::new(),
         };
 
         let task = Task::perform(client::list_all_models(endpoints), Message::ModelsLoaded);
@@ -527,6 +536,7 @@ impl App {
             // ---- chat ----
             Message::NewChat => {
                 if !self.is_busy() {
+                    self.plan_open.clear();
                     self.live_reset();
                     self.messages.clear();
                     self.current_chat = None;
@@ -1176,6 +1186,22 @@ impl App {
             }
             Message::RevertFile(rel) => {
                 self.revert_file(rel);
+                Task::none()
+            }
+            Message::HoverLine(line) => {
+                self.hover_line = line;
+                Task::none()
+            }
+            Message::HoverLeave(line) => {
+                if self.hover_line == Some(line) {
+                    self.hover_line = None;
+                }
+                Task::none()
+            }
+            Message::TogglePlan(i) => {
+                if !self.plan_open.remove(&i) {
+                    self.plan_open.insert(i);
+                }
                 Task::none()
             }
         }
@@ -1980,6 +2006,7 @@ impl App {
     }
 
     fn open_chat(&mut self, id: String) -> Task<Message> {
+        self.plan_open.clear();
         if self.is_busy() {
             return Task::none();
         }
@@ -2039,10 +2066,6 @@ impl App {
             self.think_started = Some(Instant::now());
         }
         if let Some(m) = self.current_mut() {
-            if m.thinking.is_empty() {
-                // Show live reasoning while the model is thinking.
-                m.show_thinking = true;
-            }
             m.thinking.push_str(chunk);
         }
     }

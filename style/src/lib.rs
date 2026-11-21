@@ -1,73 +1,94 @@
-//! Virgo AI look and feel: deep navy surfaces, one gold accent.
-//! Palette: #14213D navy, #FCA311 gold, #E5E5E5 text.
-//!
-//! Modern look = layered surfaces, soft shadows, large radii, a thin scrollbar,
-//! a gradient primary button and round icon buttons. Colours are unchanged.
+//! Virgo AI look: flat and calm. No gradients, no shadows, no all caps.
+//! bg #17191C  surface #1E2125  line #2C3136  text #DADFE3
+//! dim #848C94  signal #E3A857  success #6FBF8F  danger #E5737B
 
 use iced::font::{self, Weight};
 use iced::theme::Palette;
 use iced::widget::{button, container, pick_list, scrollable, text, text_editor, text_input};
-use iced::{Background, Border, Color, Font, Gradient, Shadow, Theme, gradient};
+use iced::{Background, Border, Color, Font, Shadow, Theme};
 
-// ---------------------------------------------------------------------------
-// Spacing and radius scale (use these instead of ad-hoc numbers)
-// ---------------------------------------------------------------------------
-
+// ---- scales ---------------------------------------------------------------
 pub const SP_1: f32 = 4.0;
 pub const SP_2: f32 = 8.0;
 pub const SP_3: f32 = 12.0;
 pub const SP_4: f32 = 16.0;
 pub const SP_6: f32 = 24.0;
 
-pub const R_CONTROL: f32 = 8.0;
-pub const R_PANEL: f32 = 12.0;
+/// Controls (buttons, fields, bubbles). Panes and code blocks use 0.
+pub const R_CONTROL: f32 = 6.0;
+/// Only for dots and status marks.
+pub const R_ROUND: f32 = 999.0;
 
-/// Width of the centred reading column in the chat.
-pub const READING_WIDTH: f32 = 780.0;
+pub const READING_WIDTH: f32 = 680.0;
 
-// ---------------------------------------------------------------------------
-// Colours (the only place colours are defined)
-// ---------------------------------------------------------------------------
+pub const T_11: f32 = 11.0;
+pub const T_12: f32 = 12.0;
+pub const T_13: f32 = 13.0;
+pub const T_15: f32 = 15.0;
+pub const T_20: f32 = 20.0;
 
+// ---- colours (the only place they are defined) -------------------------------
 pub fn bg() -> Color {
-    Color::from_rgb8(0x1E, 0x1E, 0x1E)
-}
-pub fn sidebar_bg() -> Color {
-    bg()
+    Color::from_rgb8(0x17, 0x19, 0x1C)
 }
 pub fn surface() -> Color {
-    Color::from_rgb8(0x2B, 0x2B, 0x2B)
+    Color::from_rgb8(0x1E, 0x21, 0x25)
 }
-pub fn surface_2() -> Color {
-    Color::from_rgb8(0x32, 0x32, 0x32)
+pub fn line() -> Color {
+    Color::from_rgb8(0x2C, 0x31, 0x36)
 }
-pub fn live() -> Color {
-    Color::from_rgb8(0x9C, 0xC2, 0xFF)
+pub fn text_color() -> Color {
+    Color::from_rgb8(0xDA, 0xDF, 0xE3)
 }
-pub fn gold() -> Color {
-    live()
-} // old call sites now use the accent
-pub fn gold_hi() -> Color {
-    Color::from_rgb8(0xBB, 0xD6, 0xFF)
+pub fn dim_color() -> Color {
+    Color::from_rgb8(0x84, 0x8C, 0x94)
 }
-pub fn on_gold() -> Color {
+pub fn signal() -> Color {
+    Color::from_rgb8(0xE3, 0xA8, 0x57)
+}
+pub fn success_color() -> Color {
+    Color::from_rgb8(0x6F, 0xBF, 0x8F)
+}
+pub fn danger_color() -> Color {
+    Color::from_rgb8(0xE5, 0x73, 0x7B)
+}
+/// Text on a signal-coloured button.
+pub fn on_signal() -> Color {
     bg()
-}
-fn line() -> Color {
-    Color::from_rgb8(0x3A, 0x3A, 0x3A)
 }
 
 pub fn alpha(color: Color, a: f32) -> Color {
     Color { a, ..color }
 }
 
+fn lighten(c: Color, t: f32) -> Color {
+    Color {
+        r: c.r + (1.0 - c.r) * t,
+        g: c.g + (1.0 - c.g) * t,
+        b: c.b + (1.0 - c.b) * t,
+        a: c.a,
+    }
+}
+
+/// Pull a colour toward grey (used to quiet syntax colours).
+pub fn mute(c: Color) -> Color {
+    let g = 0.30 * c.r + 0.59 * c.g + 0.11 * c.b;
+    let k = 0.60;
+    Color {
+        r: g + (c.r - g) * k,
+        g: g + (c.g - g) * k,
+        b: g + (c.b - g) * k,
+        a: c.a,
+    }
+}
+
 pub fn palette() -> Palette {
     Palette {
         background: bg(),
-        text: Color::from_rgb8(0xE5, 0xE5, 0xE5),
-        primary: gold(),
-        success: Color::from_rgb8(0x5F, 0xD3, 0xA4),
-        danger: Color::from_rgb8(0xF0, 0x62, 0x6A),
+        text: text_color(),
+        primary: signal(),
+        success: success_color(),
+        danger: danger_color(),
     }
 }
 
@@ -75,173 +96,166 @@ pub fn theme() -> Theme {
     Theme::custom("Virgo".to_string(), palette())
 }
 
-/// Needs `Inter-Bold.ttf` loaded in main.rs.
-pub fn bold() -> Font {
+// ---- fonts -------------------------------------------------------------------
+/// Needs Inter-SemiBold.ttf loaded in main.rs.
+pub fn semibold() -> Font {
     Font {
         family: font::Family::Name("Inter"),
-        weight: Weight::Bold,
+        weight: Weight::Semibold,
         ..Font::DEFAULT
     }
 }
+/// Kept so old call sites keep compiling: now semibold, not bold.
+pub fn bold() -> Font {
+    semibold()
+}
+/// Needs JetBrainsMono-Regular.ttf loaded in main.rs. Code, diffs, terminal only.
+pub fn mono() -> Font {
+    Font::with_name("JetBrains Mono")
+}
 
-// ---------------------------------------------------------------------------
-// Text
-// ---------------------------------------------------------------------------
-
-/// Secondary, lower-contrast text.
-pub fn dim(theme: &Theme) -> text::Style {
+// ---- text --------------------------------------------------------------------
+pub fn dim(_t: &Theme) -> text::Style {
     text::Style {
-        color: Some(alpha(theme.palette().text, 0.60)),
+        color: Some(dim_color()),
+    }
+}
+pub fn success(_t: &Theme) -> text::Style {
+    text::Style {
+        color: Some(success_color()),
+    }
+}
+pub fn danger_text(_t: &Theme) -> text::Style {
+    text::Style {
+        color: Some(danger_color()),
+    }
+}
+pub fn accent(_t: &Theme) -> text::Style {
+    text::Style {
+        color: Some(signal()),
     }
 }
 
-pub fn success(theme: &Theme) -> text::Style {
-    text::Style {
-        color: Some(theme.palette().success),
-    }
-}
-
-pub fn danger_text(theme: &Theme) -> text::Style {
-    text::Style {
-        color: Some(theme.palette().danger),
-    }
-}
-
-/// Brand colour text (gold).
-pub fn accent(theme: &Theme) -> text::Style {
-    text::Style {
-        color: Some(theme.palette().primary),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Containers
-// ---------------------------------------------------------------------------
-
-fn layer(background: Color, border: Color, radius: f32, shadow: Shadow) -> container::Style {
+// ---- containers -------------------------------------------------------------
+fn fill(c: Color) -> container::Style {
     container::Style {
-        background: Some(Background::Color(background)),
+        background: Some(Background::Color(c)),
+        ..container::Style::default()
+    }
+}
+
+fn boxed(background: Option<Color>, border: Color, width: f32, radius: f32) -> container::Style {
+    container::Style {
+        background: background.map(Background::Color),
         border: Border {
             color: border,
-            width: 1.0,
+            width,
             radius: radius.into(),
         },
-        shadow,
+        shadow: Shadow::default(),
         ..container::Style::default()
     }
 }
 
-pub fn sidebar(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(sidebar_bg())),
-        ..container::Style::default()
-    }
+pub fn clear(_t: &Theme) -> container::Style {
+    container::Style::default()
 }
-
-/// Main panels: raised surface, hairline border, soft shadow.
+pub fn sidebar(_t: &Theme) -> container::Style {
+    fill(bg())
+}
+/// Flat surface pane: no border, no radius.
 pub fn card(_t: &Theme) -> container::Style {
-    layer(surface(), line(), R_PANEL, Shadow::default())
+    fill(surface())
 }
-
-/// A recessed box inside the sidebar or a panel.
-pub fn inset(_theme: &Theme) -> container::Style {
-    layer(
-        alpha(Color::WHITE, 0.03),
-        line(),
-        R_CONTROL,
-        Shadow::default(),
-    )
+/// 1px separator. Give it a 1px width or height.
+pub fn divider(_t: &Theme) -> container::Style {
+    fill(line())
 }
-
+pub fn inset(_t: &Theme) -> container::Style {
+    boxed(Some(bg()), Color::TRANSPARENT, 0.0, R_CONTROL)
+}
 pub fn user_bubble(_t: &Theme) -> container::Style {
     container::Style {
-        text_color: Some(Color::from_rgb8(0xE0, 0xE0, 0xE0)),
-        ..layer(surface_2(), line(), 14.0, Shadow::default())
+        text_color: Some(text_color()),
+        ..boxed(Some(surface()), Color::TRANSPARENT, 0.0, R_CONTROL)
     }
 }
-
-pub fn plan_card(_theme: &Theme) -> container::Style {
-    layer(
-        alpha(gold(), 0.06),
-        alpha(gold(), 0.25),
-        R_PANEL,
-        Shadow::default(),
-    )
-}
-
-pub fn error_card(theme: &Theme) -> container::Style {
-    let d = theme.palette().danger;
-    layer(alpha(d, 0.10), alpha(d, 0.45), R_CONTROL, Shadow::default())
-}
-
-/// The collapsible reasoning panel: quiet, secondary.
-pub fn thinking_box(_theme: &Theme) -> container::Style {
-    layer(
-        alpha(Color::WHITE, 0.03),
-        line(),
+pub fn error_card(_t: &Theme) -> container::Style {
+    boxed(
+        Some(alpha(danger_color(), 0.10)),
+        Color::TRANSPARENT,
+        0.0,
         R_CONTROL,
-        Shadow::default(),
+    )
+}
+pub fn thinking_box(_t: &Theme) -> container::Style {
+    boxed(
+        Some(alpha(Color::WHITE, 0.04)),
+        Color::TRANSPARENT,
+        0.0,
+        R_CONTROL,
+    )
+}
+/// Fenced code in replies: square, hairline.
+pub fn code_block(_t: &Theme) -> container::Style {
+    boxed(Some(bg()), line(), 1.0, 0.0)
+}
+pub fn code_area(_t: &Theme) -> container::Style {
+    fill(bg())
+}
+pub fn row_added(_t: &Theme) -> container::Style {
+    fill(alpha(success_color(), 0.14))
+}
+pub fn row_removed(_t: &Theme) -> container::Style {
+    fill(alpha(danger_color(), 0.14))
+}
+/// 2px full-colour edge at the left of a changed row.
+pub fn edge(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_t: &Theme| fill(color)
+}
+/// The chat composer: one 1px field.
+pub fn composer(_t: &Theme) -> container::Style {
+    boxed(Some(bg()), line(), 1.0, R_CONTROL)
+}
+pub fn indicator(active: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_t: &Theme| container::Style {
+        background: active.then(|| Background::Color(signal())),
+        ..container::Style::default()
+    }
+}
+/// 2px underline under an active tab.
+pub fn underline(active: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_t: &Theme| fill(if active { signal() } else { Color::TRANSPARENT })
+}
+/// One piece of the progress line under the top bar.
+pub fn segment(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_t: &Theme| fill(color)
+}
+pub fn rail(_t: &Theme) -> container::Style {
+    fill(surface())
+}
+pub fn status_bar(_t: &Theme) -> container::Style {
+    fill(bg())
+}
+pub fn overlay_scrim(_t: &Theme) -> container::Style {
+    fill(alpha(Color::BLACK, 0.55))
+}
+pub fn dot(color: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_t: &Theme| boxed(Some(color), Color::TRANSPARENT, 0.0, R_ROUND)
+}
+pub fn map_area(_t: &Theme) -> container::Style {
+    boxed(Some(bg()), line(), 1.0, 0.0)
+}
+pub fn stat_pill(_t: &Theme) -> container::Style {
+    boxed(
+        Some(alpha(Color::WHITE, 0.04)),
+        Color::TRANSPARENT,
+        0.0,
+        R_CONTROL,
     )
 }
 
-/// Fenced code blocks inside replies.
-pub fn code_block(_theme: &Theme) -> container::Style {
-    layer(bg(), line(), R_CONTROL, Shadow::default())
-}
-
-/// The scrolling code area.
-pub fn code_area(_theme: &Theme) -> container::Style {
-    layer(bg(), line(), 14.0, Shadow::default())
-}
-
-pub fn row_added(theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(alpha(theme.palette().success, 0.15))),
-        ..container::Style::default()
-    }
-}
-
-pub fn row_removed(theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(alpha(theme.palette().danger, 0.14))),
-        ..container::Style::default()
-    }
-}
-
-pub fn row_selected(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(alpha(gold(), 0.13))),
-        ..container::Style::default()
-    }
-}
-
-/// The floating chat composer (2px gold border).
-pub fn composer(_t: &Theme) -> container::Style {
-    layer(surface(), line(), 14.0, Shadow::default())
-}
-
-/// Slim pill, e.g. for the status line.
-// pub fn pill(_theme: &Theme) -> container::Style {
-//     layer(alpha(Color::WHITE, 0.04), line(), 999.0, Shadow::default())
-// }
-
-/// 3px gold bar at the left of the active sidebar item.
-pub fn indicator(active: bool) -> impl Fn(&Theme) -> container::Style {
-    move |_theme: &Theme| container::Style {
-        background: active.then(|| Background::Color(gold())),
-        border: Border {
-            radius: 2.0.into(),
-            ..Border::default()
-        },
-        ..container::Style::default()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Scrollbars
-// ---------------------------------------------------------------------------
-
-/// Thin, translucent scrollbar with no track.
+// ---- scrollbars -------------------------------------------------------------
 pub fn scroll(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
     let mut style = scrollable::default(theme, status);
     style.container = container::Style::default();
@@ -258,393 +272,195 @@ pub fn scroll(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
     style
 }
 
-pub fn dim_color() -> Color {
-    Color::from_rgb8(0x84, 0x84, 0x84)
-}
-
-pub fn rail(_t: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(bg())),
+// ---- buttons ----------------------------------------------------------------
+fn flat(fill: Option<Color>, text: Color) -> button::Style {
+    button::Style {
+        background: fill.map(Background::Color),
+        text_color: text,
         border: Border {
-            color: line(),
-            width: 1.0,
-            radius: 0.0.into(),
+            radius: R_CONTROL.into(),
+            ..Border::default()
         },
-        ..container::Style::default()
+        shadow: Shadow::default(),
     }
 }
 
-pub fn status_bar(t: &Theme) -> container::Style {
-    rail(t)
+fn hovered(s: button::Status) -> bool {
+    matches!(s, button::Status::Hovered | button::Status::Pressed)
 }
 
-pub fn overlay_scrim(_t: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(alpha(Color::BLACK, 0.55))),
-        ..container::Style::default()
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum StageState {
-    Idle,
-    Live,
-    Done,
-}
-
-pub fn stage(state: StageState) -> impl Fn(&Theme) -> container::Style {
-    move |_t: &Theme| {
-        let (fill, outline) = match state {
-            StageState::Live => (alpha(live(), 0.14), alpha(live(), 0.6)),
-            StageState::Done => (Color::TRANSPARENT, line()),
-            StageState::Idle => (Color::TRANSPARENT, Color::TRANSPARENT),
-        };
-        layer(fill, outline, 999.0, Shadow::default())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Buttons
-// ---------------------------------------------------------------------------
-
-/// Sidebar navigation and list items.
 pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, status: button::Status| {
-        let text_color = theme.palette().text;
+    move |_t: &Theme, status: button::Status| match (active, hovered(status)) {
+        (true, _) => flat(Some(alpha(Color::WHITE, 0.08)), text_color()),
+        (false, true) => flat(Some(alpha(Color::WHITE, 0.06)), text_color()),
+        _ => flat(None, alpha(text_color(), 0.78)),
+    }
+}
 
-        let (background, color) = match (active, status) {
-            (true, _) => (Some(alpha(gold(), 0.12)), gold()),
-            (false, button::Status::Hovered | button::Status::Pressed) => {
-                (Some(alpha(Color::WHITE, 0.06)), text_color)
-            }
-            _ => (None, alpha(text_color, 0.78)),
-        };
-
-        button::Style {
-            background: background.map(Background::Color),
-            text_color: color,
+/// Solid signal fill. Disabled is an outline, never a dimmed fill.
+pub fn primary_button(_t: &Theme, status: button::Status) -> button::Style {
+    match status {
+        button::Status::Disabled => button::Style {
+            background: None,
+            text_color: dim_color(),
             border: Border {
-                color: Color::TRANSPARENT,
-                width: 0.0,
+                color: line(),
+                width: 1.0,
                 radius: R_CONTROL.into(),
             },
             shadow: Shadow::default(),
-        }
-    }
-}
-
-/// Gold button with a subtle gradient (same two golds as before, blended).
-pub fn primary_button(_theme: &Theme, status: button::Status) -> button::Style {
-    let background = match status {
-        button::Status::Disabled => Background::Color(alpha(gold(), 0.30)),
+        },
         button::Status::Hovered | button::Status::Pressed => {
-            Background::Gradient(Gradient::Linear(
-                gradient::Linear::new(std::f32::consts::FRAC_PI_2)
-                    .add_stop(0.0, gold_hi())
-                    .add_stop(1.0, gold_hi()),
-            ))
+            flat(Some(lighten(signal(), 0.08)), on_signal())
         }
-        button::Status::Active => Background::Gradient(Gradient::Linear(
-            gradient::Linear::new(std::f32::consts::FRAC_PI_2)
-                .add_stop(0.0, gold_hi())
-                .add_stop(1.0, gold()),
-        )),
-    };
-    let text_color = match status {
-        button::Status::Disabled => alpha(Color::WHITE, 0.45),
-        _ => on_gold(),
-    };
-
-    button::Style {
-        background: Some(background),
-        text_color,
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: R_CONTROL.into(),
-        },
-        shadow: Shadow::default(),
+        button::Status::Active => flat(Some(signal()), on_signal()),
     }
 }
 
-/// Round, icon-only send button.
-pub fn send_button(_theme: &Theme, status: button::Status) -> button::Style {
-    let background = match status {
-        button::Status::Disabled => alpha(gold(), 0.25),
-        button::Status::Hovered | button::Status::Pressed => gold_hi(),
-        button::Status::Active => gold(),
-    };
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color: on_gold(),
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 999.0.into(),
-        },
-        shadow: Shadow::default(),
-    }
+/// Icon-only send button. The icon colour (signal / dim) is set by the caller.
+pub fn send_button(_t: &Theme, status: button::Status) -> button::Style {
+    let fill = hovered(status).then(|| alpha(Color::WHITE, 0.06));
+    flat(fill, text_color())
 }
 
-/// Round, icon-only stop button.
-pub fn stop_button(theme: &Theme, status: button::Status) -> button::Style {
-    let mut style = danger_button(theme, status);
-    style.border.radius = 999.0.into();
-    style
+/// Small square stop button: danger text on transparent.
+pub fn stop_button(_t: &Theme, status: button::Status) -> button::Style {
+    let fill = hovered(status).then(|| alpha(danger_color(), 0.12));
+    flat(fill, danger_color())
 }
 
-pub fn danger_button(theme: &Theme, status: button::Status) -> button::Style {
-    let p = theme.extended_palette();
-    let (background, text_color) = match status {
-        button::Status::Active => (p.danger.base.color, p.danger.base.text),
+pub fn danger_button(_t: &Theme, status: button::Status) -> button::Style {
+    match status {
+        button::Status::Active => flat(Some(danger_color()), on_signal()),
         button::Status::Hovered | button::Status::Pressed => {
-            (p.danger.strong.color, p.danger.strong.text)
+            flat(Some(lighten(danger_color(), 0.08)), on_signal())
         }
-        button::Status::Disabled => (
-            alpha(p.danger.base.color, 0.35),
-            alpha(p.danger.base.text, 0.6),
-        ),
-    };
-
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color,
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: R_CONTROL.into(),
-        },
-        shadow: Shadow::default(),
+        button::Status::Disabled => {
+            flat(Some(alpha(danger_color(), 0.35)), alpha(on_signal(), 0.6))
+        }
     }
 }
 
-/// Quiet button for secondary actions.
-pub fn ghost_button(theme: &Theme, status: button::Status) -> button::Style {
-    let text_color = theme.palette().text;
-
-    let (background, color) = match status {
+/// Quiet button: 6% white fill on hover, nothing else.
+pub fn ghost_button(_t: &Theme, status: button::Status) -> button::Style {
+    match status {
         button::Status::Hovered | button::Status::Pressed => {
-            (Some(alpha(Color::WHITE, 0.07)), text_color)
+            flat(Some(alpha(Color::WHITE, 0.06)), text_color())
         }
-        button::Status::Disabled => (None, alpha(text_color, 0.3)),
-        button::Status::Active => (None, alpha(text_color, 0.72)),
-    };
-
-    button::Style {
-        background: background.map(Background::Color),
-        text_color: color,
-        border: Border {
-            color: Color::TRANSPARENT,
-            width: 0.0,
-            radius: 10.0.into(),
-        },
-        shadow: Shadow::default(),
+        button::Status::Disabled => flat(None, alpha(text_color(), 0.3)),
+        button::Status::Active => flat(None, alpha(text_color(), 0.72)),
     }
 }
 
-/// Small pill for attached files and suggestion chips.
-pub fn chip(theme: &Theme, status: button::Status) -> button::Style {
-    let background = match status {
-        button::Status::Hovered | button::Status::Pressed => alpha(gold(), 0.22),
-        _ => alpha(gold(), 0.10),
-    };
-
-    button::Style {
-        background: Some(Background::Color(background)),
-        text_color: theme.palette().text,
-        border: Border {
-            color: alpha(gold(), 0.35),
-            width: 1.0,
-            radius: 999.0.into(),
-        },
-        shadow: Shadow::default(),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Inputs
-// ---------------------------------------------------------------------------
-
-/// The chat box: no border, the composer container draws it.
-pub fn composer_input(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let mut style = text_input::default(theme, status);
-    style.background = Background::Color(Color::TRANSPARENT);
-    style.border = Border {
-        color: Color::TRANSPARENT,
-        width: 0.0,
-        radius: 0.0.into(),
-    };
-    style
-}
-
-/// Borderless text area inside the composer.
-pub fn composer_editor(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
-    let mut style = text_editor::default(theme, status);
-    style.background = Background::Color(Color::TRANSPARENT);
-    style.border = Border {
-        color: Color::TRANSPARENT,
-        width: 0.0,
-        radius: 0.0.into(),
-    };
-    style
-}
-
-/// Editable plan box: dark field, rounded, gold border when focused.
-pub fn plan_editor(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
-    let p = theme.palette();
-    let border = match status {
-        text_editor::Status::Focused => gold(),
-        text_editor::Status::Hovered => alpha(gold(), 0.45),
-        _ => alpha(Color::WHITE, 0.08),
-    };
-    text_editor::Style {
-        background: Background::Color(bg()),
-        border: Border {
-            color: border,
-            width: 1.5,
-            radius: R_CONTROL.into(),
-        },
-        icon: alpha(p.text, 0.6),
-        placeholder: alpha(p.text, 0.4),
-        value: p.text,
-        selection: alpha(gold(), 0.30),
-    }
-}
-
-pub fn field(theme: &Theme, status: text_input::Status) -> text_input::Style {
-    let mut style = text_input::default(theme, status);
-    style.background = Background::Color(bg());
-    let border = match status {
-        text_input::Status::Focused => gold(),
-        _ => alpha(Color::WHITE, 0.08),
-    };
-    style.border = Border {
-        color: border,
-        width: 1.0,
-        radius: R_CONTROL.into(),
-    };
-    style
-}
-
-pub fn pick(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
-    let mut style = pick_list::default(theme, status);
-    style.background = Background::Color(bg());
-    style.border = Border {
-        color: alpha(Color::WHITE, 0.08),
-        width: 1.0,
-        radius: R_CONTROL.into(),
-    };
-    style
-}
-
-// ---------------------------------------------------------------------------
-// Memory map
-// ---------------------------------------------------------------------------
-
-/// Colour of a note group (folder). Stable for a given group index.
-pub fn group_color(i: usize) -> Color {
-    const PALETTE: [(u8, u8, u8); 6] = [
-        (0xFC, 0xA3, 0x11), // gold
-        (0x5F, 0xD3, 0xA4), // mint
-        (0x6C, 0xA8, 0xFF), // blue
-        (0xC0, 0x84, 0xFC), // violet
-        (0xF0, 0x62, 0x6A), // coral
-        (0x4F, 0xD1, 0xE0), // cyan
-    ];
-    let (r, g, b) = PALETTE[i % PALETTE.len()];
-    Color::from_rgb8(r, g, b)
-}
-
-/// Small round colour marker.
-pub fn dot(color: Color) -> impl Fn(&Theme) -> container::Style {
-    move |_theme: &Theme| container::Style {
-        background: Some(Background::Color(color)),
-        border: Border {
-            radius: 999.0.into(),
-            ..Border::default()
-        },
-        ..container::Style::default()
-    }
-}
-
-/// The dark area the map is drawn on.
-pub fn map_area(_theme: &Theme) -> container::Style {
-    layer(bg(), line(), 16.0, Shadow::default())
-}
-
-/// Small number box (Notes / Links / Words).
-pub fn stat_pill(_theme: &Theme) -> container::Style {
-    layer(
-        alpha(Color::WHITE, 0.04),
-        line(),
-        R_CONTROL,
-        Shadow::default(),
+/// Plain text link-style button (file lists, suggestions).
+pub fn chip(_t: &Theme, status: button::Status) -> button::Style {
+    flat(
+        hovered(status).then(|| alpha(Color::WHITE, 0.06)),
+        text_color(),
     )
 }
 
-/// A note in the list: soft card, gold outline when selected.
-pub fn note_card(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, status: button::Status| {
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        let (fill, outline) = match (active, hovered) {
-            (true, _) => (alpha(gold(), 0.12), alpha(gold(), 0.50)),
-            (false, true) => (alpha(Color::WHITE, 0.07), alpha(Color::WHITE, 0.12)),
-            (false, false) => (alpha(Color::WHITE, 0.03), line()),
-        };
-        button::Style {
-            background: Some(Background::Color(fill)),
-            text_color: theme.palette().text,
-            border: Border {
-                color: outline,
-                width: 1.0,
-                radius: R_CONTROL.into(),
-            },
-            shadow: Shadow::default(),
-        }
-    }
-}
-
-/// Filter pill above the note list.
-pub fn filter_chip(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
-    move |theme: &Theme, status: button::Status| {
-        let hovered = matches!(status, button::Status::Hovered | button::Status::Pressed);
-        let (fill, text_color, outline) = if active {
-            (gold(), on_gold(), Color::TRANSPARENT)
-        } else if hovered {
-            (alpha(Color::WHITE, 0.08), theme.palette().text, line())
+/// Text tab. Pair it with `underline(active)` below it.
+pub fn tab_button(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_t: &Theme, status: button::Status| {
+        let color = if active || hovered(status) {
+            text_color()
         } else {
-            (
-                alpha(Color::WHITE, 0.04),
-                alpha(theme.palette().text, 0.75),
-                line(),
-            )
+            dim_color()
         };
-        button::Style {
-            background: Some(Background::Color(fill)),
-            text_color,
-            border: Border {
-                color: outline,
-                width: 1.0,
-                radius: 999.0.into(),
-            },
-            shadow: Shadow::default(),
-        }
+        flat(None, color)
     }
 }
 
-/// The code editor: dark field, hairline border, gold when focused.
+pub fn note_card(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_t: &Theme, status: button::Status| match (active, hovered(status)) {
+        (true, _) => flat(Some(alpha(Color::WHITE, 0.08)), text_color()),
+        (false, true) => flat(Some(alpha(Color::WHITE, 0.05)), text_color()),
+        _ => flat(None, text_color()),
+    }
+}
+
+// ---- inputs -----------------------------------------------------------------
+fn focus_border(focused: bool) -> Color {
+    if focused {
+        alpha(text_color(), 0.45)
+    } else {
+        line()
+    }
+}
+
+pub fn composer_input(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let mut style = text_input::default(theme, status);
+    style.background = Background::Color(Color::TRANSPARENT);
+    style.border = Border::default();
+    style
+}
+
+pub fn composer_editor(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
+    let mut style = text_editor::default(theme, status);
+    style.background = Background::Color(Color::TRANSPARENT);
+    style.border = Border::default();
+    style
+}
+
+pub fn plan_editor(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
+    let mut s = text_editor::default(theme, status);
+    s.background = Background::Color(bg());
+    s.border = Border {
+        color: focus_border(matches!(status, text_editor::Status::Focused)),
+        width: 1.0,
+        radius: R_CONTROL.into(),
+    };
+    s.selection = alpha(signal(), 0.25);
+    s
+}
+
+pub fn field(theme: &Theme, status: text_input::Status) -> text_input::Style {
+    let mut s = text_input::default(theme, status);
+    s.background = Background::Color(bg());
+    s.border = Border {
+        color: focus_border(matches!(status, text_input::Status::Focused)),
+        width: 1.0,
+        radius: R_CONTROL.into(),
+    };
+    s.selection = alpha(signal(), 0.25);
+    s
+}
+
+pub fn pick(theme: &Theme, status: pick_list::Status) -> pick_list::Style {
+    let mut s = pick_list::default(theme, status);
+    s.background = Background::Color(bg());
+    s.border = Border {
+        color: line(),
+        width: 1.0,
+        radius: R_CONTROL.into(),
+    };
+    s
+}
+
+/// The code editor: square, hairline.
 pub fn code_editor(theme: &Theme, status: text_editor::Status) -> text_editor::Style {
     let mut s = text_editor::default(theme, status);
     s.background = Background::Color(bg());
     s.border = Border {
-        color: if matches!(status, text_editor::Status::Focused) {
-            alpha(gold(), 0.5)
-        } else {
-            line()
-        },
+        color: focus_border(matches!(status, text_editor::Status::Focused)),
         width: 1.0,
-        radius: 14.0.into(),
+        radius: 0.0.into(),
     };
-    s.selection = alpha(gold(), 0.30);
+    s.selection = alpha(signal(), 0.25);
     s
+}
+
+// ---- memory map -------------------------------------------------------------
+pub fn group_color(i: usize) -> Color {
+    const PALETTE: [(u8, u8, u8); 6] = [
+        (0xE3, 0xA8, 0x57),
+        (0x6F, 0xBF, 0x8F),
+        (0x6C, 0xA8, 0xFF),
+        (0xC0, 0x84, 0xFC),
+        (0xE5, 0x73, 0x7B),
+        (0x4F, 0xD1, 0xE0),
+    ];
+    let (r, g, b) = PALETTE[i % PALETTE.len()];
+    Color::from_rgb8(r, g, b)
 }

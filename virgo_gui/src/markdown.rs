@@ -5,7 +5,7 @@
 use iced::widget::{
     button, column, container, horizontal_rule, horizontal_space, rich_text, row, span, text,
 };
-use iced::{Element, Font, Length};
+use iced::{Element, Length};
 
 use app::Message;
 
@@ -41,13 +41,8 @@ fn block_view<'a>(block: Block) -> Element<'a, Message> {
             level,
             text: content,
         } => {
-            let size = match level {
-                1 => 26,
-                2 => 21,
-                3 => 18,
-                _ => 16,
-            };
-            text(content).size(size).font(style::bold()).into()
+            let size = if level <= 2 { style::T_20 } else { style::T_15 };
+            text(content).size(size).font(style::semibold()).into()
         }
         Block::Item {
             marker,
@@ -70,9 +65,8 @@ fn code_view<'a>(lang: String, code: String) -> Element<'a, Message> {
     } else {
         lang
     };
-
     let header = row![
-        text(label).size(11).style(style::dim),
+        text(label).size(style::T_11).style(style::dim),
         horizontal_space(),
         button(icon_manager::label(
             icon_manager::copy(),
@@ -80,13 +74,13 @@ fn code_view<'a>(lang: String, code: String) -> Element<'a, Message> {
             11,
             icon_manager::muted()
         ))
-        .padding([3, 10])
+        .padding([3, 8])
         .on_press(Message::Copy(code.clone()))
         .style(style::ghost_button),
     ]
     .align_y(iced::alignment::Vertical::Center);
 
-    container(column![header, text(code).font(Font::MONOSPACE).size(13)].spacing(8))
+    container(column![header, text(code).font(style::mono()).size(style::T_13)].spacing(8))
         .padding(12)
         .width(Length::Fill)
         .style(style::code_block)
@@ -100,12 +94,12 @@ fn inline_view<'a>(src: &str) -> Element<'a, Message> {
             let s = span(piece);
             match kind {
                 Inline::Plain => s,
-                Inline::Bold => s.font(style::bold()),
-                Inline::Code => s.font(Font::MONOSPACE).color(style::palette().primary),
+                Inline::Bold => s.font(style::semibold()),
+                Inline::Code => s.font(style::mono()),
             }
         })
         .collect();
-    rich_text(spans).size(15).into()
+    rich_text(spans).size(style::T_15).line_height(1.5).into()
 }
 
 // ---------------------------------------------------------------------------

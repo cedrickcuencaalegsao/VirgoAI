@@ -30,6 +30,14 @@ Reply with ONLY the replacement code inside a single fenced code block, with no 
 Keep the same indentation style. Use exactly one line unless the change truly needs more. \
 If the line should be deleted, reply with an empty code block.";
 
+const GROUNDING: &str = "\n\n# Grounding rules\n\
+- Only state facts found in the provided files, memory notes or request. \
+Never invent file paths, functions, fields, versions or APIs.\n\
+- Write file paths and identifiers in `backticks` only if you saw them in the provided text.\n\
+- If something you need is not provided, say \"I don't see X in the provided files\" \
+and ask the user to attach or @mention it. Do not guess.\n\
+- Separate what the files show from your suggestions.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Intent {
     /// A question or explanation: planner (optional) then a normal answer.
@@ -287,6 +295,7 @@ pub fn history_from(messages: &[ChatMessage]) -> Vec<ChatMsg> {
 pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
     let change = pending.intent == Intent::Change;
     let mut system = String::from(PLANNER_SYSTEM);
+    system.push_str(GROUNDING);
     if change {
         system.push_str(PLANNER_CHANGE_SUFFIX);
     }
@@ -461,6 +470,7 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         EXECUTOR_SYSTEM
     };
     let mut system = String::from(base);
+    system.push_str(GROUNDING);
     append_instructions(&mut system, &pending.instructions);
     append_memory(&mut system, &pending.memory);
     append_project(&mut system, &pending.project);
@@ -483,10 +493,7 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         stream: true,
         think: cfg.executor_think.then_some(true),
         format: None,
-        options: Options::new(
-            cfg.num_ctx,
-            (pending.intent == Intent::Change).then_some(0.1),
-        ),
+        options: Options::new(cfg.num_ctx, Some(0.2)),
         keep_alive: cfg.keep_alive.clone(),
     }
 }

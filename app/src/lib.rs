@@ -358,6 +358,8 @@ pub struct App {
     pub palette_open: bool,
     pub palette_query: String,
     stream_buf: String, // coalesced tokens
+
+    evidence: String,
 }
 
 impl App {
@@ -461,6 +463,7 @@ impl App {
             palette_open: false,
             palette_query: String::new(),
             stream_buf: String::new(),
+            evidence: String::new(),
         };
 
         let task = Task::perform(client::list_all_models(endpoints), Message::ModelsLoaded);
@@ -1298,6 +1301,9 @@ impl App {
             return Task::none();
         };
 
+        // Remember everything the model is about to see, so the reply can be checked against it later.
+        self.evidence = format!("{}\n{}\n{}", pending.task, pending.memory, pending.project);
+
         let request = pipeline::executor_request(&self.cfg, &pending, plan.as_deref());
         self.streamed_actions = 0;
         self.messages
@@ -1481,6 +1487,21 @@ impl App {
                     };
                 } else {
                     self.status = "Done".into();
+                }
+
+                // Grounding check: a plain answer may only name files and identifiers
+                // that were in the evidence the model was given.
+                if self.intent == Intent::Answer {
+                    let known: Vec<String> = self
+                        .project
+                        .as_ref()
+                        .map(|p| p.entries.iter().map(|e| e.rel.clone()).collect())
+                        .unwrap_or_default();
+                    if let Some(m) = self.messages.last_mut() {
+                        let reply = pipeline::strip_think_tags(&m.content);
+                        let report = agent::ground::check(&reply, &known, &self.evidence);
+                        m.content.push_str(&report.warning());
+                    }
                 }
 
                 self.save_chat();

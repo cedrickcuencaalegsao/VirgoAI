@@ -110,7 +110,7 @@ dependencies = [
 
 [[package]]
 name = "app"
-version = "0.1.12"
+version = "0.1.13"
 dependencies = [
  "agent",
  "chats",
@@ -4928,7 +4928,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "virgo-ai"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "app",
  "iced",
@@ -4942,7 +4942,7 @@ version = "0.1.0"
 
 [[package]]
 name = "virgo_gui"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "agent",
  "app",

@@ -7,7 +7,9 @@ use iced::{Element, Length, keyboard};
 
 use super::{markdown, short};
 use agent::{ChatMessage, Role};
-use app::{App, Message};
+use app::{App, Message, Phase};
+use iced::{Background, Border, Color, Theme};
+
 use icon_manager;
 
 pub fn scroll_id() -> scrollable::Id {
@@ -51,15 +53,18 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let body: Element<'_, Message> = if app.messages.is_empty() {
         welcome()
     } else {
-        column(
+        let mut items = column(
             app.messages
                 .iter()
                 .enumerate()
                 .map(|(i, m)| bubble(app, i, m)),
         )
-        .spacing(style::SP_4)
-        .padding([style::SP_2, style::SP_3])
-        .into()
+        .spacing(style::SP_4);
+        // Scouting has no message of its own yet, so show it here.
+        if app.phase == Phase::Scouting {
+            items = items.push(working_line(app, "Reading project files".to_string()));
+        }
+        items.padding([style::SP_2, style::SP_3]).into()
     };
 
     let history = scrollable(
@@ -166,9 +171,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
             )
             .max_height(160)
             .width(Length::Fill),
-            container(action).padding([0, 4]),
+            container(action).padding([0, 6]),
         ]
-        .align_y(Vertical::Bottom),
+        .align_y(Vertical::Center),
     )
     .padding(2)
     .style(style::composer);
@@ -214,7 +219,7 @@ fn is_step(line: &str) -> bool {
     d > 0 && t[d..].starts_with(". ")
 }
 
-/// The plan as one dim line. Expands on click, never shows planner prose while streaming.
+/// The plan as a card. The latest plan is open by default; older ones start collapsed.
 fn plan_line<'a>(
     app: &'a App,
     index: usize,
@@ -235,24 +240,40 @@ fn plan_line<'a>(
         (false, Some(n)) => format!("Plan · {n} steps"),
         (false, None) => "Plan".to_string(),
     };
-    let open = app.plan_open.contains(&index) && !active;
+    // The latest plan is open by default; older ones start collapsed. A click flips either.
+    let toggled = app.plan_open.contains(&index);
+    let open = (latest != toggled) && !active && !msg.content.is_empty();
     let chevron = if open {
         icon_manager::chevron_down()
     } else {
         icon_manager::chevron_right()
     };
 
-    let mut col = column![
+    // While the planner runs, show animated dots instead of a dead, disabled button.
+    let head: Element<'a, Message> = if active {
+        container(working_line(app, label)).padding([2, 6]).into()
+    } else {
         button(icon_manager::label(chevron, label, 13, style::dim_color()))
             .padding([2, 6])
-            .on_press_maybe(
-                (!active && !msg.content.is_empty()).then_some(Message::TogglePlan(index))
-            )
+            .on_press_maybe((!msg.content.is_empty()).then_some(Message::TogglePlan(index)))
             .style(style::ghost_button)
-    ]
-    .spacing(style::SP_2);
+            .into()
+    };
+    let mut col = column![head].spacing(style::SP_2);
+    // The planner's reasoning: live while it thinks, then behind "Thought for Xs".
+    if !msg.thinking.is_empty() {
+        col = col.push(thinking_header(app, index, msg, active));
+        if msg.show_thinking {
+            col = col.push(thinking_panel(msg));
+        }
+    }
     if open {
         col = col.push(markdown::view(&msg.content));
+        return container(col)
+            .padding([style::SP_2, style::SP_3])
+            .width(Length::Fill)
+            .style(style::card)
+            .into();
     }
     col.into()
 }
@@ -288,19 +309,13 @@ fn ai_bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a
         body = body.push(thinking_header(app, index, msg, active));
     }
     if msg.show_thinking && !msg.thinking.is_empty() {
-        body = body.push(
-            container(
-                text(msg.thinking.as_str())
-                    .size(style::T_12)
-                    .style(style::dim),
-            )
-            .padding(10)
-            .width(Length::Fill)
-            .style(style::thinking_box),
-        );
+        body = body.push(thinking_panel(msg));
     }
     if !msg.content.is_empty() {
         body = body.push(markdown::view(&msg.content));
+        if active {
+            body = body.push(working_line(app, "Writing".to_string()));
+        }
     }
     if let Some(cards) = super::actions::view(app, index, &msg.content, active) {
         body = body.push(cards);
@@ -316,22 +331,23 @@ fn thinking_header<'a>(
     msg: &'a ChatMessage,
     active: bool,
 ) -> Element<'a, Message> {
-    let now = active && msg.think_secs.is_none();
+    let now = active && msg.think_secs.is_none() && msg.content.is_empty();
     let label = if now {
-        let secs = app
-            .think_started
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0);
-        format!("Thinking {secs}s")
+        match app.think_started {
+            Some(t) => format!("Thinking {}s", t.elapsed().as_secs()),
+            None => "Waiting for the model".to_string(),
+        }
     } else if let Some(secs) = msg.think_secs {
         format!("Thought for {secs:.1}s")
     } else {
         String::new()
     };
 
-    let mut line = row![text(label).size(style::T_12).style(style::dim)]
-        .spacing(8)
-        .align_y(Vertical::Center);
+    let mut line = row![].spacing(8).align_y(Vertical::Center);
+    if now {
+        line = line.push(working_dots(app));
+    }
+    line = line.push(text(label).size(style::T_12).style(style::dim));
     if !msg.thinking.is_empty() {
         line = line.push(
             button(text(if msg.show_thinking { "Hide" } else { "Show" }).size(style::T_12))
@@ -642,4 +658,54 @@ fn bubble<'a>(app: &'a App, index: usize, msg: &'a ChatMessage) -> Element<'a, M
         .into(),
         Role::Plan | Role::Assistant => ai_bubble(app, index, msg),
     }
+}
+
+/// Three dots that light up in turn, so it is obvious a model is still working.
+fn working_dots<'a>(app: &App) -> Element<'a, Message> {
+    let lit = ((app.tick / 2) % 3) as usize;
+    row((0..3).map(|i| {
+        let a = if i == lit { 1.0 } else { 0.25 };
+        container(horizontal_space())
+            .width(Length::Fixed(6.0))
+            .height(Length::Fixed(6.0))
+            .style(move |_t: &Theme| container::Style {
+                background: Some(Background::Color(Color {
+                    a,
+                    ..style::signal()
+                })),
+                border: Border {
+                    radius: 3.0.into(),
+                    ..Border::default()
+                },
+                ..Default::default()
+            })
+            .into()
+    }))
+    .spacing(4)
+    .align_y(Vertical::Center)
+    .into()
+}
+
+/// Animated "a model is working" line: pulsing dots followed by a label.
+fn working_line<'a>(app: &App, label: String) -> Element<'a, Message> {
+    row![
+        working_dots(app),
+        text(label).size(style::T_12).style(style::dim)
+    ]
+    .spacing(8)
+    .align_y(Vertical::Center)
+    .into()
+}
+
+/// The reasoning text, shown live while the model thinks.
+fn thinking_panel<'a>(msg: &'a ChatMessage) -> Element<'a, Message> {
+    container(
+        text(msg.thinking.as_str())
+            .size(style::T_12)
+            .style(style::dim),
+    )
+    .padding(10)
+    .width(Length::Fill)
+    .style(style::thinking_box)
+    .into()
 }

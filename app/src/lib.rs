@@ -486,7 +486,7 @@ impl App {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![keyboard::on_key_press(shortcut)];
         if self.is_working() {
-            subs.push(iced::time::every(Duration::from_millis(400)).map(|_| Message::Tick));
+            subs.push(iced::time::every(Duration::from_millis(150)).map(|_| Message::Tick));
             subs.push(iced::time::every(Duration::from_millis(40)).map(|_| Message::Flush));
         }
         Subscription::batch(subs)
@@ -2062,10 +2062,15 @@ impl App {
     }
 
     fn append_thinking(&mut self, chunk: &str) {
-        if self.think_started.is_none() {
+        // First reasoning chunk of this stage: open the panel so it streams live.
+        let first = self.think_started.is_none();
+        if first {
             self.think_started = Some(Instant::now());
         }
         if let Some(m) = self.current_mut() {
+            if first {
+                m.show_thinking = true;
+            }
             m.thinking.push_str(chunk);
         }
     }

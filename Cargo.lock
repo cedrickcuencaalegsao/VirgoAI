@@ -4939,6 +4939,10 @@ dependencies = [
 [[package]]
 name = "virgo_engine"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tracing",
+]
 
 [[package]]
 name = "virgo_gui"

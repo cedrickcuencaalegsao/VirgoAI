@@ -18,7 +18,7 @@ use code::CodeDoc;
 use super::{ActionStatus, App, Message};
 
 /// Height of one code row in the code panel (must match the GUI).
-const ROW_H: f32 = 24.0;
+const ROW_H: f32 = 22.0;
 
 impl App {
     /// Review mode: only when Edit mode is on (plus live edit enabled, a folder open,

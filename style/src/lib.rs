@@ -109,9 +109,12 @@ pub fn semibold() -> Font {
 pub fn bold() -> Font {
     semibold()
 }
-/// Needs JetBrainsMono-Regular.ttf loaded in main.rs. Code, diffs, terminal only.
+/// Code, diffs, terminal only.
+/// The screenshots show code in a proportional font (a 4-space indent is ~10px),
+/// so "JetBrains Mono" is not being matched. System monospace always works;
+/// switch back once the family name below is confirmed.
 pub fn mono() -> Font {
-    Font::with_name("JetBrains Mono")
+    Font::MONOSPACE
 }
 
 // ---- text --------------------------------------------------------------------
@@ -209,6 +212,10 @@ pub fn row_added(_t: &Theme) -> container::Style {
 pub fn row_removed(_t: &Theme) -> container::Style {
     fill(alpha(danger_color(), 0.14))
 }
+/// Faint band behind the hovered line; stronger for the line with the suggestion bar open.
+pub fn current_line(strong: bool) -> impl Fn(&Theme) -> container::Style {
+    move |_t: &Theme| fill(alpha(Color::WHITE, if strong { 0.08 } else { 0.04 }))
+}
 /// 2px full-colour edge at the left of a changed row.
 pub fn edge(color: Color) -> impl Fn(&Theme) -> container::Style {
     move |_t: &Theme| fill(color)
@@ -294,6 +301,19 @@ pub fn nav_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Styl
         (true, _) => flat(Some(alpha(Color::WHITE, 0.08)), text_color()),
         (false, true) => flat(Some(alpha(Color::WHITE, 0.06)), text_color()),
         _ => flat(None, alpha(text_color(), 0.78)),
+    }
+}
+
+/// Flat list row (file tree): square, so the selection is a full-width band.
+pub fn tree_item(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |_t: &Theme, status: button::Status| {
+        let mut s = match (active, hovered(status)) {
+            (true, _) => flat(Some(alpha(Color::WHITE, 0.08)), text_color()),
+            (false, true) => flat(Some(alpha(Color::WHITE, 0.05)), text_color()),
+            _ => flat(None, alpha(text_color(), 0.78)),
+        };
+        s.border.radius = 0.0.into();
+        s
     }
 }
 

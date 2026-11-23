@@ -1,4 +1,5 @@
-//! Right-hand panel: open a project folder, browse its files, attach them.
+//! Right-hand panel: an explorer for the open folder. Flat full-width rows,
+//! a small section title, and the attach action tucked at the row end.
 
 use iced::alignment::Vertical;
 use iced::widget::{
@@ -16,7 +17,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     };
 
     container(body)
-        .padding(16)
+        .padding([10, 8])
         .width(Length::Fixed(300.0))
         .height(Length::Fill)
         .style(style::card)
@@ -24,8 +25,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn icon_button<'a>(icon: Svg<'a>, message: Message) -> Element<'a, Message> {
-    button(icon_manager::tint(icon, 16.0, icon_manager::muted()))
-        .padding(7)
+    button(icon_manager::tint(icon, 15.0, icon_manager::muted()))
+        .padding(6)
         .on_press(message)
         .style(style::ghost_button)
         .into()
@@ -34,7 +35,7 @@ fn icon_button<'a>(icon: Svg<'a>, message: Message) -> Element<'a, Message> {
 /// Shown until a folder is opened.
 fn empty_view(app: &App) -> Element<'_, Message> {
     column![
-        text("Project").size(18).font(style::bold()),
+        text("Explorer").size(style::T_12).style(style::dim),
         text(
             "Open a folder to chat about your code. Click a file to open it in the code \
              panel, use the paperclip to attach it, or type @ in the message to mention it."
@@ -67,27 +68,35 @@ fn empty_view(app: &App) -> Element<'_, Message> {
         .spacing(6),
     ]
     .spacing(12)
+    .padding([0, 4])
     .into()
 }
 
 fn open_view<'a>(app: &'a App, project: &'a Project) -> Element<'a, Message> {
+    // Section title with the folder actions, then the root folder as the first row.
     let header = row![
-        column![
-            text("Project").size(18).font(style::bold()),
-            text(project.name.as_str()).size(12).style(style::dim),
-        ]
-        .spacing(2),
+        text("Explorer")
+            .size(style::T_12)
+            .font(style::semibold())
+            .style(style::dim),
         horizontal_space(),
         icon_button(icon_manager::folder_open(), Message::OpenFolder),
         icon_button(icon_manager::refresh_cw(), Message::RefreshProject),
         icon_button(icon_manager::x(), Message::CloseProject),
     ]
-    .spacing(2)
+    .spacing(0)
+    .padding([0, 4])
     .align_y(Vertical::Center);
 
-    let hint = text("Click a file to open it in the code panel. Use the paperclip to attach it to the chat, or type @ to mention files.")
-        .size(11)
-        .style(style::dim);
+    let root = row![
+        icon_manager::tint(icon_manager::chevron_down(), 14.0, icon_manager::muted()),
+        text(project.name.as_str())
+            .size(style::T_13)
+            .font(style::semibold()),
+    ]
+    .spacing(6)
+    .padding([4, 8])
+    .align_y(Vertical::Center);
 
     let rows = column(
         project
@@ -95,9 +104,10 @@ fn open_view<'a>(app: &'a App, project: &'a Project) -> Element<'a, Message> {
             .into_iter()
             .map(|entry| tree_row(app, entry)),
     )
-    .spacing(1);
+    .spacing(0);
 
-    let mut page = column![header, hint, scrollable(rows).height(Length::Fill)].spacing(10);
+    let mut page = column![header, root, scrollable(rows).style(style::scroll).height(Length::Fill)]
+        .spacing(4);
 
     if project.truncated {
         page = page.push(
@@ -111,7 +121,7 @@ fn open_view<'a>(app: &'a App, project: &'a Project) -> Element<'a, Message> {
 }
 
 fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
-    let indent = Space::with_width(Length::Fixed(entry.depth as f32 * 14.0));
+    let indent = Space::with_width(Length::Fixed(entry.depth as f32 * 12.0));
 
     if entry.is_dir {
         let open = app.expanded.contains(&entry.rel);
@@ -132,9 +142,9 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
 
         button(content)
             .width(Length::Fill)
-            .padding([5, 8])
+            .padding([3, 8])
             .on_press(Message::ToggleDir(entry.rel.clone()))
-            .style(style::nav_item(false))
+            .style(style::tree_item(false))
             .into()
     } else {
         let attached = app.attached.contains(&entry.rel);
@@ -154,33 +164,31 @@ fn tree_row<'a>(app: &'a App, entry: &'a Entry) -> Element<'a, Message> {
         .spacing(6)
         .align_y(Vertical::Center);
 
-        // Paperclip attaches the file to the chat; it turns into a check once attached.
-        let attach_icon = if attached {
-            icon_manager::check()
+        // The paperclip stays quiet until a file is attached, then it becomes a check.
+        let (attach_icon, attach_color) = if attached {
+            (icon_manager::check(), icon_manager::accent())
         } else {
-            icon_manager::paperclip()
-        };
-        let attach_color = if attached {
-            icon_manager::accent()
-        } else {
-            icon_manager::muted()
+            (
+                icon_manager::paperclip(),
+                style::alpha(icon_manager::muted(), 0.4),
+            )
         };
 
-        row![
-            // Clicking the file opens it in the code panel.
+        // One band: the open file's selection runs under the attach button too.
+        let line = row![
             button(content)
                 .width(Length::Fill)
-                .padding([5, 8])
+                .padding([3, 8])
                 .on_press(Message::OpenFile(entry.rel.clone()))
-                .style(style::nav_item(open_here)),
-            button(icon_manager::tint(attach_icon, 15.0, attach_color))
-                .padding([6, 7])
+                .style(style::tree_item(open_here)),
+            button(icon_manager::tint(attach_icon, 14.0, attach_color))
+                .padding([4, 6])
                 .on_press(Message::ToggleAttach(entry.rel.clone()))
                 .style(style::ghost_button),
         ]
-        .spacing(2)
-        .align_y(Vertical::Center)
-        .into()
+        .spacing(0)
+        .align_y(Vertical::Center);
+        line.into()
     }
 }
 
@@ -197,6 +205,7 @@ fn footer(app: &App) -> Element<'_, Message> {
             .style(style::ghost_button),
     ]
     .spacing(6)
+    .padding([0, 4])
     .align_y(Vertical::Center)
     .into()
 }

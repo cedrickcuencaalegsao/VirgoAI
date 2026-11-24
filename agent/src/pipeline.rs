@@ -55,18 +55,18 @@ pub enum Intent {
 /// The format rules here override the "numbered plan" wording of `PLANNER_SYSTEM`.
 const PLANNER_CHANGE_SUFFIX: &str = r#"
 
-The user wants the code changed. You are given a project map, the full contents of some files, and for large files an OUTLINE (line: definition). Plan against the real code, reuse existing names, follow the project's conventions.
+The user wants the code changed. You are given a project map, the full contents of some files, and for large files an OUTLINE (line: definition). Plan against the real code, reuse existing names, follow the project's conventions and language.
 
 OUTPUT FORMAT (overrides the format above). Reply with ONLY one JSON object, no prose, no code fence:
-{"goal": "one sentence", "steps": [{"id": 1, "file": "exact/path.rs", "is_new": false, "target": "existing fn or struct name", "anchor": "one real code line copied verbatim", "symbols": ["App", "Message"], "details": ["Cut the fields `input` and `messages` out of `struct App`", "Add `pub struct ChatState { pub input: String, pub messages: Vec<ChatMessage> }` with `#[derive(Default)]`"], "change": "one-sentence summary", "depends_on": [], "verify": "cargo check"}], "need_to_check": []}
+{"goal": "one sentence", "steps": [{"id": 1, "file": "<exact path from the project map>", "is_new": false, "target": "<existing function, class or section name>", "anchor": "<one real line copied verbatim from the file>", "symbols": ["<exact name that appears in the file>"], "details": ["<imperative instruction naming exact identifiers from the code shown>", "<second instruction, with the signature of anything new>"], "change": "<one-sentence summary>", "depends_on": [], "verify": "<the project's check command, or empty>"}], "need_to_check": []}
 
 Rules:
 - `details`: 2-8 imperative instructions. Each names identifiers that appear in the code shown and gives the signature of anything new. Never write "organize", "improve" or "refactor" without saying exactly what moves where.
-- `anchor` is a line of code, never a heading or number. `target` is a symbol, never a path.
+- `anchor` is a line of code (or a line of text for a config or doc file), never a heading you invented or a number. `target` is a symbol or section name, never a path.
 - One step = ONE file = ONE edit block, at most about 60 changed lines.
 - If the request needs more than 7 steps, plan ONLY phase 1 and start `goal` with "Phase 1 of N:".
-- Every step must leave the project compiling. For moves: step 1 creates the new file (is_new), step 2 adds `mod x;` and switches callers, step 3 removes the old code.
-- Put `cargo check` in `verify` on every step that changes Rust code.
+- Every step must leave the project in a working state. For moves: step 1 creates the new file (is_new), step 2 adds the import or module declaration and switches callers, step 3 removes the old code.
+- `verify` is a shell command that checks the result. Choose it from the manifest files in the project map: Cargo.toml -> cargo check, package.json -> the build or test script run through its package manager, go.mod -> go build ./..., pyproject.toml or requirements.txt -> the project's test runner or python -m compileall, pom.xml -> mvn -q compile. Put it on every step that changes code. Leave it empty if you are not sure.
 - `need_to_check` holds file paths only.
 - Use exact paths from the project map. Never invent files or functions.
 "#;
@@ -83,62 +83,62 @@ exact. Follow the plan and the request. Never paste whole files, never describe 
 of making it, and do not claim a change succeeded: the app reports the real results. Put at most \
 one short sentence before each block.";
 
-const EDIT_PROTOCOL: &str = "# Editing project files\n\
-Write one fenced block per file. Open the block with three backticks, the word `edit`, a space \
-and the path relative to the project root. Close it with three backticks. Example:\n\
-````````edit src/main.rs\n\
-<<<<<<< SEARCH\n\
-exact lines copied from the current file\n\
-=======\n\
-replacement lines\n\
->>>>>>> REPLACE\n\
-```````\n\
-Rules:\n\
-- ALWAYS include the three marker lines `<<<<<<< SEARCH`, `=======` and `>>>>>>> REPLACE`. \
-A block without them is ignored.\n\
-- The FIRST line of a block must be exactly three backticks immediately followed by `edit` \
-and the path, for example ```edit tester/Cargo.toml . Never put the word `edit` on its own line \
-inside a block, and never open a block with bare backticks.\n\
-- A command goes in its own block: ```run on the first line, the command on the second line, \
-then closing backticks. Never write a command as plain text.\n\
-- Do not write a file path as a heading above the block.\n\
-- SEARCH must match the current file exactly (including indentation) and include 2-3 lines \
-of context so it is unique. You may use several SEARCH/REPLACE pairs in one block.\n\
-- Write every line ONCE. Never repeat a line or a group of lines you already wrote. \
-Do not copy the SEARCH lines into REPLACE more than once.\n\
-- When the last REPLACE is done, write `>>>>>>> REPLACE`, close the fence and STOP.\n\
-- To create a new file leave SEARCH empty. To delete lines leave REPLACE empty.\n\
-- To delete a whole file write a block ```delete path/to/file``` with nothing inside.\n\
-- Only edit files whose contents were provided.\n\
-- To verify your work you may add a block with the info string `run` containing ONE shell \
-command (for example `cargo check`); the user will approve it and you will receive the output.```";
+const EDIT_PROTOCOL: &str = r#"# Editing project files
+Write one fenced block per file. Open the block with three backticks, the word `edit`, a space and the path relative to the project root. Close it with three backticks. Format:
+```edit <path relative to the project root>
+<<<<<<< SEARCH
+<exact lines copied from the current file>
+=======
+<replacement lines>
+>>>>>>> REPLACE
+```
+Rules:
+- ALWAYS include the three marker lines `<<<<<<< SEARCH`, `=======` and `>>>>>>> REPLACE`. A block without them is ignored.
+- The FIRST line of a block must be exactly three backticks immediately followed by `edit` and the path, for example ```edit <path>. Never put the word `edit` on its own line inside a block, and never open a block with bare backticks.
+- A command goes in its own block: ```run on the first line, the command on the second line, then closing backticks. Never write a command as plain text.
+- Do not write a file path as a heading above the block.
+- SEARCH must match the current file exactly (including indentation) and include 2-3 lines of context so it is unique. You may use several SEARCH/REPLACE pairs in one block.
+- Write every line ONCE. Never repeat a line or a group of lines you already wrote. Do not copy the SEARCH lines into REPLACE more than once.
+- When the last REPLACE is done, write `>>>>>>> REPLACE`, close the fence and STOP.
+- To create a new file leave SEARCH empty. To delete lines leave REPLACE empty.
+- To delete a whole file write a block ```delete <path>``` with nothing inside.
+- Only edit files whose contents were provided.
+- To verify your work you may add a block with the info string `run` containing ONE shell command (the project's own build, check or test command). The user will approve it and you will receive the output."#;
 
 /// Appended to the system prompt of a single plan step.
-const STEP_RULES: &str = "# This turn: ONE plan step\n\
-You are carrying out a single step of an approved plan. Write exactly ONE fenced block for the \
-file named in the step. Do not touch other files and do not repeat steps that are already done. \
-The file contents below are CURRENT and already include the earlier steps. Do not add `run` \
-blocks and write nothing after the closing fence.\n\
-Write each line of code exactly once. If the change is already present in the file, \
-do not add it again.\n\
-Pick ONE of these two forms:\n\
-A) New file, or a file under about 40 lines: write the COMPLETE new contents:\n\
-``````edit path/to/file.rs\n\
-<<<<<<< SEARCH\n\
-=======\n\
-(the whole file, with your change included)\n\
->>>>>>> REPLACE\n\
-`````\n\
-B) Longer file: SEARCH/REPLACE with SEARCH copied exactly from the file:\n\
-````edit path/to/file.rs\n\
-<<<<<<< SEARCH\n\
-    let old = 1;\n\
-=======\n\
-    let old = 1;\n\
-    let added = 2;\n\
->>>>>>> REPLACE\n\
-```\n\
-Never output only the changed line without the markers.```";
+const STEP_RULES: &str = r#"# This turn: ONE plan step
+You are carrying out a single step of an approved plan. Write exactly ONE fenced block for the file named in the step. Do not touch other files and do not repeat steps that are already done. The file contents below are CURRENT and already include the earlier steps. Do not add `run` blocks and write nothing after the closing fence.
+Write each line of code exactly once. If the change is already present in the file, do not add it again.
+
+Pick the form by whether the file exists:
+
+A) The file does NOT exist yet (the step says "new file"). ONLY then, write the complete contents:
+```edit <path of the new file>
+<<<<<<< SEARCH
+=======
+<complete contents of the new file>
+>>>>>>> REPLACE
+```
+
+B) The file already exists (always, however short it is, in any language). Use SEARCH/REPLACE. SEARCH must be lines copied exactly from the current contents shown below. REPLACE is those same lines with your change included:
+```edit <path of the existing file>
+<<<<<<< SEARCH
+<exact line copied from the file>
+=======
+<the same line, then your new lines>
+>>>>>>> REPLACE
+```
+
+Never rewrite a whole existing file. Never output only the changed line without the markers.
+
+Adding a dependency, script or setting to a config or manifest file is also a form B edit. Pick ONE line that already exists in the file, such as a section header or the last entry of the list, and make SEARCH exactly that line. REPLACE is that same line plus the new line(s), so everything already in the file stays untouched. Keep the file's own syntax valid: if the entry you anchor on is followed by more entries, or the new line goes after an existing last entry, add or move the separators (such as commas) that the format requires.
+Typical anchors, always copied from the file as shown below:
+- Cargo.toml, pyproject.toml, Pipfile: the section header, for example the dependencies header
+- package.json, composer.json: the opening line of the dependencies object, or its last entry
+- requirements.txt: the last existing line
+- go.mod: the `require (` line, or the last entry inside it
+- Gemfile: the `source` line or the last `gem` line
+- pom.xml, build.gradle: the line of the dependencies block's opening tag or brace"#;
 
 const REPAIR_SYSTEM: &str = "You fix JSON plans for a coding assistant. You get the user's \
 request, the project files, a previous plan and a list of problems found by an automatic checker. \

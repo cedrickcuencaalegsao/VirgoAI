@@ -222,7 +222,7 @@ impl App {
         let instructions = run.instructions.clone();
         let done = run.done_lines();
         let retry_error = run.last_error.take();
-        
+
         // "Remove duplicates" steps: the app removes them itself and keeps one copy.
         // If nothing duplicate is found, the step falls through to the model as usual.
         if is_dedupe_step(&step) {
@@ -557,11 +557,44 @@ impl App {
             return;
         };
 
-        // Already a valid edit: leave it alone.
-        if workspace::parse_actions(&content)
-            .iter()
-            .any(|a| matches!(a, Action::Edit { .. }))
-        {
+        let hunks: Vec<workspace::Hunk> = workspace::parse_actions(&content)
+            .into_iter()
+            .filter_map(|a| match a {
+                Action::Edit { hunks, .. } => Some(hunks),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        if !hunks.is_empty() {
+            let original = self
+                .project
+                .as_ref()
+                .and_then(|p| p.read(&step_file).ok())
+                .unwrap_or_default();
+
+            // Empty SEARCH on a file that already has content is not allowed:
+            // turn each such hunk into a real SEARCH/REPLACE with infer_edit.
+            let broken =
+                !original.trim().is_empty() && hunks.iter().any(|h| h.search.trim().is_empty());
+            if broken {
+                let fixed: Vec<String> = hunks
+                    .iter()
+                    .filter_map(|h| {
+                        if h.search.trim().is_empty() {
+                            infer_edit(&original, &h.replace)
+                        } else {
+                            Some((h.search.clone(), h.replace.clone()))
+                        }
+                    })
+                    .map(|(s, r)| format!("<<<<<<< SEARCH\n{s}\n=======\n{r}\n>>>>>>> REPLACE"))
+                    .collect();
+                if !fixed.is_empty() {
+                    if let Some(m) = self.messages.get_mut(msg_idx) {
+                        m.content = format!("```edit {step_file}\n{}\n```", fixed.join("\n"));
+                    }
+                }
+            }
             return;
         }
 

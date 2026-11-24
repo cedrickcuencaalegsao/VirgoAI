@@ -10,7 +10,7 @@
 //!     -> `on_step_done` -> apply + verify on disk -> next step / retry / stop
 
 use agent::pipeline::{self, StepInput};
-use agent::plan::{self, MAX_STEP_TRIES, Plan, PlanRun, StepStatus};
+use agent::plan::{self, MAX_STEP_TRIES, Plan, PlanRun, Step, StepStatus};
 use agent::{ChatMessage, Role};
 use iced::Task;
 use iced::widget::text_editor;
@@ -222,6 +222,28 @@ impl App {
         let instructions = run.instructions.clone();
         let done = run.done_lines();
         let retry_error = run.last_error.take();
+        
+        // "Remove duplicates" steps: the app removes them itself and keeps one copy.
+        // If nothing duplicate is found, the step falls through to the model as usual.
+        if is_dedupe_step(&step) {
+            if let Ok(root) = self.edit_root() {
+                if let Ok(Some((change, removed))) = workspace::apply_dedupe(&root, &step.file) {
+                    let mut set = workspace::ChangeSet::new();
+                    set.record(change);
+                    self.changes.push(set);
+                    self.after_disk_change(std::slice::from_ref(&step.file));
+                    if let Some(run) = self.plan_run.as_mut() {
+                        run.mark_done();
+                    }
+                    self.status = format!(
+                        "Removed {removed} duplicate item(s) from {} and kept one of each.",
+                        step.file
+                    );
+                    self.save_chat();
+                    return self.start_next_step();
+                }
+            }
+        }
 
         // Read the step's file NOW: earlier steps may have changed it.
         let Some(project) = self.project.as_ref() else {
@@ -274,7 +296,7 @@ impl App {
     }
 
     /// The executor stream of a step ended: apply, verify, then move on or retry.
-        /// The executor stream of a step ended: apply, verify, then move on or retry.
+    /// The executor stream of a step ended: apply, verify, then move on or retry.
     pub(crate) fn on_step_done(&mut self) -> Task<Message> {
         self.phase = Phase::Idle;
         let msg_idx = self.messages.len().saturating_sub(1);
@@ -530,7 +552,7 @@ impl App {
         let Some(content) = self
             .messages
             .get(msg_idx)
-            .map(|m| pipeline::strip_think_tags(&m.content))
+            .map(|m| pipeline::repair_fences(&pipeline::strip_think_tags(&m.content)))
         else {
             return;
         };
@@ -599,6 +621,15 @@ fn line_key(line: &str) -> String {
         .find(|c| c == '=' || c == '(' || c == '{')
         .unwrap_or(t.len());
     t[..end].trim().to_string()
+}
+
+/// Steps whose job is to remove duplicates are done by the app, not the model.
+fn is_dedupe_step(step: &Step) -> bool {
+    if step.is_new {
+        return false;
+    }
+    let text = format!("{} {}", step.change, step.details.join(" ")).to_lowercase();
+    text.contains("duplicate") || text.contains("deduplicate") || text.contains("repeated")
 }
 
 /// (search, replace) for a reply that has no SEARCH/REPLACE markers.

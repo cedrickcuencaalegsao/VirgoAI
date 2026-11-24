@@ -36,14 +36,39 @@ pub struct Options {
     /// `None` keeps the model's own default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    /// >1.0 discourages repeating recent tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f32>,
+    /// How many recent tokens the penalty looks at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_last_n: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    /// Hard cap on generated tokens (thinking tokens count too).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_predict: Option<i32>,
 }
 
 impl Options {
+    /// Anti-repetition defaults are on for every call.
     pub fn new(num_ctx: u32, temperature: Option<f32>) -> Self {
         Self {
             num_ctx,
             temperature,
+            repeat_penalty: Some(1.1),
+            repeat_last_n: Some(256),
+            top_k: Some(40),
+            top_p: Some(0.9),
+            num_predict: None,
         }
+    }
+
+    /// Stop a runaway reply after `n` tokens.
+    pub fn max_tokens(mut self, n: i32) -> Self {
+        self.num_predict = Some(n);
+        self
     }
 }
 

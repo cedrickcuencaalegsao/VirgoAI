@@ -1,11 +1,11 @@
 [package]
 name = "app"
-version = "0.1.14"
+version = "0.1.15"
 edition = "2024"
 
 [dependencies]
-dirs = "5"
-rfd = "0.15"
+dirs = "7.0.0"
+rfd = "0.18.0"
 iced = { version = "0.13", features = ["tokio", "svg"] }
 terminal = { path = "../terminal" }
 workspace = { path = "../workspace" }

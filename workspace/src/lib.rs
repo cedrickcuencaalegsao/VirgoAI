@@ -4,6 +4,7 @@
 mod live;
 pub use live::{HunkState, LiveEdit, LiveHunk, live_edits, parse_live};
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -46,7 +47,9 @@ fn parse(reply: &str, require_closed: bool) -> Vec<Action> {
     let mut lines = reply.lines();
 
     while let Some(line) = lines.next() {
-        let Some((n, info)) = open_fence(line) else { continue };
+        let Some((n, info)) = open_fence(line) else {
+            continue;
+        };
 
         let mut body: Vec<&str> = Vec::new();
         let mut closed = false;
@@ -65,7 +68,10 @@ fn parse(reply: &str, require_closed: bool) -> Vec<Action> {
         if let Some(path) = info.strip_prefix("edit ") {
             let hunks = parse_hunks(&body);
             if !hunks.is_empty() {
-                actions.push(Action::Edit { path: path.trim().to_string(), hunks });
+                actions.push(Action::Edit {
+                    path: path.trim().to_string(),
+                    hunks,
+                });
             }
         } else if let Some(path) = info.strip_prefix("delete ") {
             if !path.trim().is_empty() {
@@ -123,7 +129,10 @@ fn parse_hunks(body: &[&str]) -> Vec<Hunk> {
             }
             State::Replace => {
                 if t.starts_with(">>>>>>>") {
-                    hunks.push(Hunk { search: search.join("\n"), replace: replace.join("\n") });
+                    hunks.push(Hunk {
+                        search: search.join("\n"),
+                        replace: replace.join("\n"),
+                    });
                     state = State::Out;
                 } else {
                     replace.push(line);
@@ -158,7 +167,9 @@ pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
 
 /// The real (symlink-resolved) parent of `path` must be inside the real root.
 fn confined(root: &Path, path: &Path) -> Result<(), String> {
-    let root = root.canonicalize().map_err(|e| format!("project folder: {e}"))?;
+    let root = root
+        .canonicalize()
+        .map_err(|e| format!("project folder: {e}"))?;
     let parent = path
         .parent()
         .ok_or("invalid path")?
@@ -204,7 +215,26 @@ pub fn apply_hunks(original: &str, hunks: &[Hunk]) -> Result<String, String> {
     for (i, hunk) in hunks.iter().enumerate() {
         text = replace_once(&text, hunk).map_err(|e| format!("block {}: {e}", i + 1))?;
     }
-    Ok(if crlf { text.replace('\n', "\r\n") } else { text })
+    Ok(if crlf {
+        text.replace('\n', "\r\n")
+    } else {
+        text
+    })
+}
+
+/// Keep the first copy of `search` and delete every later copy.
+fn keep_first(text: &str, search: &str) -> String {
+    let Some(at) = text.find(search) else {
+        return text.to_string();
+    };
+    let end = at + search.len();
+    let tail = text[end..].replace(search, "");
+    // Deleting a block can leave a run of blank lines behind.
+    let mut tail = tail;
+    while tail.contains("\n\n\n") {
+        tail = tail.replace("\n\n\n", "\n\n");
+    }
+    format!("{}{}", &text[..end], tail)
 }
 
 fn replace_once(text: &str, hunk: &Hunk) -> Result<String, String> {
@@ -220,11 +250,18 @@ fn replace_once(text: &str, hunk: &Hunk) -> Result<String, String> {
         return Ok(new);
     }
 
+    // An empty REPLACE (or a REPLACE equal to SEARCH) on text that appears several
+    // times means "remove the duplicates": keep the first copy.
+    let dedupe_intent = hunk.replace.trim().is_empty() || hunk.replace.trim() == hunk.search.trim();
+
     // 1) exact match
     match text.matches(&hunk.search).count() {
         1 => return Ok(text.replacen(&hunk.search, &hunk.replace, 1)),
         n if n > 1 => {
-            return Err("SEARCH matches more than once; include more surrounding lines".into())
+            if dedupe_intent {
+                return Ok(keep_first(text, &hunk.search));
+            }
+            return Err("SEARCH matches more than once; include more surrounding lines".into());
         }
         _ => {}
     }
@@ -236,7 +273,12 @@ fn replace_once(text: &str, hunk: &Hunk) -> Result<String, String> {
         return Err("SEARCH text not found".into());
     }
     let hits: Vec<usize> = (0..=t_lines.len() - s_lines.len())
-        .filter(|&i| s_lines.iter().enumerate().all(|(k, s)| t_lines[i + k].trim() == s.trim()))
+        .filter(|&i| {
+            s_lines
+                .iter()
+                .enumerate()
+                .all(|(k, s)| t_lines[i + k].trim() == s.trim())
+        })
         .collect();
 
     match hits.as_slice() {
@@ -249,6 +291,15 @@ fn replace_once(text: &str, hunk: &Hunk) -> Result<String, String> {
             Ok(out.join("\n"))
         }
         [] => Err("SEARCH text not found in the file".into()),
+        many if dedupe_intent => {
+            // Remove every later hit (from the bottom up so indexes stay valid).
+            let n = s_lines.len();
+            let mut out: Vec<&str> = t_lines.clone();
+            for &i in many.iter().skip(1).rev() {
+                out.drain(i..i + n);
+            }
+            Ok(out.join("\n"))
+        }
         _ => Err("SEARCH matches more than once; include more surrounding lines".into()),
     }
 }
@@ -264,8 +315,8 @@ pub fn apply_edit(root: &Path, rel: &str, hunks: &[Hunk]) -> Result<FileChange, 
     } else {
         None
     };
-    let after = apply_hunks(before.as_deref().unwrap_or(""), hunks)
-        .map_err(|e| format!("{rel}: {e}"))?;
+    let after =
+        apply_hunks(before.as_deref().unwrap_or(""), hunks).map_err(|e| format!("{rel}: {e}"))?;
     if before.as_deref() == Some(after.as_str()) {
         return Err(format!("{rel}: the edit changes nothing"));
     }
@@ -279,9 +330,15 @@ pub fn apply_edit(root: &Path, rel: &str, hunks: &[Hunk]) -> Result<FileChange, 
     let on_disk = fs::read_to_string(&path)
         .map_err(|e| format!("{rel}: written but cannot be read back: {e}"))?;
     if on_disk != after {
-        return Err(format!("{rel}: verification failed, the file on disk differs"));
+        return Err(format!(
+            "{rel}: verification failed, the file on disk differs"
+        ));
     }
-    Ok(FileChange { rel, before, after: Some(after) })
+    Ok(FileChange {
+        rel,
+        before,
+        after: Some(after),
+    })
 }
 
 /// Delete one text file; reports success only once it is really gone.
@@ -298,7 +355,133 @@ pub fn apply_delete(root: &Path, rel: &str) -> Result<FileChange, String> {
     if path.exists() {
         return Err(format!("{rel}: still exists after delete"));
     }
-    Ok(FileChange { rel, before: Some(before), after: None })
+    Ok(FileChange {
+        rel,
+        before: Some(before),
+        after: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Removing duplicate items
+// ---------------------------------------------------------------------------
+
+fn is_prefix_line(t: &str) -> bool {
+    t.starts_with("#[") || t.starts_with("#![") || t.starts_with("//") || t.starts_with("/*")
+}
+
+/// Remove top-level items (`use` lines, functions, structs, impls...) that appear
+/// more than once with identical text. The first copy stays. Returns the new text
+/// and how many duplicates were removed. Indented code is never touched.
+pub fn dedupe_items(text: &str) -> (String, usize) {
+    let crlf = text.contains("\r\n");
+    let src = text.replace("\r\n", "\n");
+    let lines: Vec<&str> = src.lines().collect();
+
+    let mut out: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut removed = 0usize;
+    let mut i = 0usize;
+
+    while i < lines.len() {
+        let line = lines[i];
+        if line.trim().is_empty() || line.starts_with(char::is_whitespace) {
+            out.push(line);
+            i += 1;
+            continue;
+        }
+
+        // Find the end of the item that starts here.
+        let start = i;
+        let mut depth: i32 = 0;
+        let mut j = i;
+        loop {
+            let l = lines[j];
+            depth += l.matches('{').count() as i32 - l.matches('}').count() as i32;
+            let t = l.trim_end();
+            let last = j + 1 >= lines.len();
+            let next_blank = lines.get(j + 1).map_or(true, |n| n.trim().is_empty());
+            let ends = depth <= 0
+                && !is_prefix_line(t.trim_start())
+                && (t.ends_with(';') || t.ends_with('}') || next_blank);
+            if ends || last {
+                break;
+            }
+            j += 1;
+        }
+        let block = &lines[start..=j];
+
+        // Only real items with some substance are compared.
+        let body = block.iter().find(|l| !is_prefix_line(l.trim_start()));
+        let key = block
+            .iter()
+            .map(|l| l.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let comparable = body.is_some_and(|b| !b.trim_start().starts_with('}'))
+            && key.chars().count() >= 8
+            && key.chars().any(char::is_alphanumeric);
+
+        if comparable && !seen.insert(key) {
+            removed += 1;
+            // Do not leave two blank lines in a row where the copy was.
+            let blank_after = lines.get(j + 1).is_some_and(|n| n.trim().is_empty());
+            let blank_before = out.last().map_or(true, |p| p.trim().is_empty());
+            i = if blank_after && blank_before {
+                j + 2
+            } else {
+                j + 1
+            };
+            continue;
+        }
+
+        out.extend_from_slice(block);
+        i = j + 1;
+    }
+
+    let mut text_out = out.join("\n");
+    if src.ends_with('\n') {
+        text_out.push('\n');
+    }
+    if crlf {
+        text_out = text_out.replace('\n', "\r\n");
+    }
+    (text_out, removed)
+}
+
+/// Remove duplicate top-level items from one file and write it (verified, atomic).
+/// `Ok(None)` means there was nothing to remove.
+pub fn apply_dedupe(root: &Path, rel: &str) -> Result<Option<(FileChange, usize)>, String> {
+    let path = safe_join(root, rel)?;
+    let rel = clean(rel).to_string();
+    if !path.is_file() {
+        return Ok(None);
+    }
+    confined(root, &path).map_err(|e| format!("{rel}: {e}"))?;
+    let before =
+        fs::read_to_string(&path).map_err(|_| format!("{rel} is not a UTF-8 text file"))?;
+
+    let (after, removed) = dedupe_items(&before);
+    if removed == 0 || after == before {
+        return Ok(None);
+    }
+
+    write_atomic(&path, &after).map_err(|e| format!("could not write {rel}: {e}"))?;
+    let on_disk = fs::read_to_string(&path)
+        .map_err(|e| format!("{rel}: written but cannot be read back: {e}"))?;
+    if on_disk != after {
+        return Err(format!(
+            "{rel}: verification failed, the file on disk differs"
+        ));
+    }
+    Ok(Some((
+        FileChange {
+            rel,
+            before: Some(before),
+            after: Some(after),
+        },
+        removed,
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +506,11 @@ pub struct ChangeSet {
 
 impl ChangeSet {
     pub fn new() -> Self {
-        Self { id: NEXT_ID.fetch_add(1, Ordering::Relaxed), files: Vec::new(), reverted: false }
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            files: Vec::new(),
+            reverted: false,
+        }
     }
 
     /// Keep the first `before` and the latest `after` for each file.
@@ -377,7 +564,10 @@ mod tests {
     }
 
     fn hunk(s: &str, r: &str) -> Hunk {
-        Hunk { search: s.into(), replace: r.into() }
+        Hunk {
+            search: s.into(),
+            replace: r.into(),
+        }
     }
 
     #[test]
@@ -385,7 +575,10 @@ mod tests {
         let root = tmp("modify");
         fs::write(root.join("a.rs"), "fn a() {}\nfn b() {}\n").unwrap();
         let change = apply_edit(&root, "a.rs", &[hunk("fn a() {}", "fn a() { 1 }")]).unwrap();
-        assert_eq!(fs::read_to_string(root.join("a.rs")).unwrap(), "fn a() { 1 }\nfn b() {}\n");
+        assert_eq!(
+            fs::read_to_string(root.join("a.rs")).unwrap(),
+            "fn a() { 1 }\nfn b() {}\n"
+        );
         assert_eq!(change.before.as_deref(), Some("fn a() {}\nfn b() {}\n"));
         assert!(!root.join(".a.rs.virgo-tmp").exists());
     }
@@ -394,7 +587,10 @@ mod tests {
     fn create_file_in_new_folder() {
         let root = tmp("create");
         apply_edit(&root, "src/auth.rs", &[hunk("", "pub fn auth() {}")]).unwrap();
-        assert_eq!(fs::read_to_string(root.join("src/auth.rs")).unwrap(), "pub fn auth() {}\n");
+        assert_eq!(
+            fs::read_to_string(root.join("src/auth.rs")).unwrap(),
+            "pub fn auth() {}\n"
+        );
     }
 
     #[test]
@@ -480,14 +676,18 @@ mod tests {
         let reply = "Sure.\n````edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n````\n";
         assert_eq!(
             parse_actions(reply),
-            vec![Action::Edit { path: "a.rs".into(), hunks: vec![hunk("x", "y")] }]
+            vec![Action::Edit {
+                path: "a.rs".into(),
+                hunks: vec![hunk("x", "y")]
+            }]
         );
     }
 
     #[test]
     fn streaming_only_returns_closed_blocks() {
         let one = "```edit a.rs\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n```\n";
-        let partial = format!("{one}```edit b.rs\n<<<<<<< SEARCH\nq\n=======\nr\n>>>>>>> REPLACE\n");
+        let partial =
+            format!("{one}```edit b.rs\n<<<<<<< SEARCH\nq\n=======\nr\n>>>>>>> REPLACE\n");
         assert_eq!(completed_actions(&partial).len(), 1);
         let done = format!("{partial}```\n");
         assert_eq!(completed_actions(&done).len(), 2);
@@ -499,7 +699,29 @@ mod tests {
         let reply = "```delete old.rs\n```\n```run\ncargo check\n```\n";
         assert_eq!(
             parse_actions(reply),
-            vec![Action::Delete("old.rs".into()), Action::Run("cargo check".into())]
+            vec![
+                Action::Delete("old.rs".into()),
+                Action::Run("cargo check".into())
+            ]
         );
+    }
+
+    #[test]
+    fn duplicate_functions_are_removed_and_one_is_kept() {
+        let text = "use a::B;\nuse a::B;\n\npub fn hi() {\n    1\n}\n\npub fn hi() {\n    1\n}\n\npub fn other() {\n    2\n}\n";
+        let (out, n) = dedupe_items(text);
+        assert_eq!(n, 2);
+        assert_eq!(
+            out,
+            "use a::B;\n\npub fn hi() {\n    1\n}\n\npub fn other() {\n    2\n}\n"
+        );
+    }
+
+    #[test]
+    fn empty_replace_on_repeated_search_keeps_the_first_copy() {
+        let text = "fn a() {}\nfn x() {}\nfn a() {}\n";
+        let out = apply_hunks(text, &[hunk("fn a() {}", "")]).unwrap();
+        assert_eq!(out.matches("fn a() {}").count(), 1);
+        assert!(out.starts_with("fn a() {}"));
     }
 }

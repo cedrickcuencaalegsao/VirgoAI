@@ -1134,6 +1134,9 @@ impl App {
                     return Task::none();
                 }
                 let live = self.flush_stream();
+                if self.stream_is_looping() {
+                    return Task::batch([live, self.cut_loop()]);
+                }
                 Task::batch([live, scroll_to_end()])
             }
             Message::TogglePalette => {
@@ -1410,6 +1413,13 @@ impl App {
     fn on_stage_done(&mut self) -> Task<Message> {
         self.abort = None;
         self.finish_thinking();
+        // Fix broken fences first, then remove accidental repetition, before anything parses
+        // or applies the reply. Only executor replies hold edit blocks.
+        if let Some(m) = self.current_mut() {
+            if m.role == Role::Assistant {
+                m.content = pipeline::collapse_repeats(&pipeline::repair_fences(&m.content));
+            }
+        }
 
         match self.phase {
             Phase::Planning => {
@@ -2956,6 +2966,25 @@ impl App {
                 doc.mark_changed(before);
             }
         }
+    }
+
+    /// The reply that is streaming right now has started repeating itself.
+    fn stream_is_looping(&self) -> bool {
+        self.messages.last().is_some_and(|m| {
+            matches!(m.role, Role::Assistant | Role::Plan) && pipeline::looks_looping(&m.content)
+        })
+    }
+
+    /// Abort the runaway stream and carry on with the cleaned-up reply.
+    fn cut_loop(&mut self) -> Task<Message> {
+        if let Some(handle) = self.abort.take() {
+            handle.abort();
+        }
+        self.stream_buf.clear();
+        let task = self.on_stage_done();
+        self.status =
+            "The model started repeating itself, so I stopped it and removed the repeats.".into();
+        task
     }
 }
 

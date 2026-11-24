@@ -134,6 +134,11 @@ fn clean_path(raw: &str) -> String {
 fn normalize(plan: &mut Plan) {
     plan.goal = plan.goal.trim().to_string();
 
+    // Drop steps that repeat an earlier one (same file + same change).
+    let mut seen_steps: std::collections::HashSet<(String, String)> = Default::default();
+    plan.steps
+        .retain(|s| seen_steps.insert((clean_path(&s.file), s.change.trim().to_lowercase())));
+
     let mut renumber: HashMap<u32, u32> = HashMap::new();
     for (i, s) in plan.steps.iter().enumerate() {
         renumber.entry(s.id).or_insert(i as u32 + 1);
@@ -151,13 +156,20 @@ fn normalize(plan: &mut Plan) {
             .unwrap_or("")
             .to_string();
         s.change = s.change.trim().to_string();
-        s.symbols.retain(|x| !x.trim().is_empty());
+
+        let mut seen_sym = std::collections::HashSet::new();
+        s.symbols
+            .retain(|x| !x.trim().is_empty() && seen_sym.insert(x.trim().to_string()));
+
+        let mut seen_det = std::collections::HashSet::new();
         s.details = s
             .details
             .iter()
             .map(|d| d.trim().to_string())
             .filter(|d| !d.is_empty())
+            .filter(|d| seen_det.insert(d.to_lowercase()))
             .collect();
+
         s.verify = s
             .verify
             .take()
@@ -176,11 +188,13 @@ fn normalize(plan: &mut Plan) {
         s.id = new_id;
     }
 
+    let mut seen_need = std::collections::HashSet::new();
     plan.need_to_check = plan
         .need_to_check
         .iter()
         .map(|f| clean_path(f))
         .filter(|f| !f.is_empty())
+        .filter(|f| seen_need.insert(f.clone()))
         .collect();
 }
 

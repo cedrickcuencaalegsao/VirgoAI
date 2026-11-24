@@ -6,6 +6,11 @@ use ollama::types::{ChatMsg, ChatRequest, Options};
 
 /// How many earlier user/assistant messages are sent along as context.
 const HISTORY_LIMIT: usize = 10;
+const MAX_PLAN_TOKENS: i32 = 6144; // planner thinking counts too
+const MAX_ANSWER_TOKENS: i32 = 4096;
+const MAX_STEP_TOKENS: i32 = 2048;
+const MAX_SMALL_TOKENS: i32 = 512;
+const MAX_LINE_TOKENS: i32 = 1024;
 
 const PLANNER_SYSTEM: &str = "You are the planning stage of a local assistant. \
 Think carefully about the user's task and write a short numbered plan (at most 7 steps) \
@@ -79,8 +84,8 @@ of making it, and do not claim a change succeeded: the app reports the real resu
 one short sentence before each block.";
 
 const EDIT_PROTOCOL: &str = "# Editing project files\n\
-Write one fenced block per file. The opening line is three backticks, the word `edit`, \
-then the path relative to the project root. Example of a complete, valid block:\n\
+Write one fenced block per file. Open the block with three backticks, the word `edit`, a space \
+and the path relative to the project root. Close it with three backticks. Example:\n\
 ````````edit src/main.rs\n\
 <<<<<<< SEARCH\n\
 exact lines copied from the current file\n\
@@ -89,29 +94,42 @@ replacement lines\n\
 >>>>>>> REPLACE\n\
 ```````\n\
 Rules:\n\
-- Use exactly three backticks to open and to close the block.\n\
 - ALWAYS include the three marker lines `<<<<<<< SEARCH`, `=======` and `>>>>>>> REPLACE`. \
-Never write only the new code: a block without the markers is ignored and nothing is changed.\n\
+A block without them is ignored.\n\
+- The FIRST line of a block must be exactly three backticks immediately followed by `edit` \
+and the path, for example ```edit tester/Cargo.toml . Never put the word `edit` on its own line \
+inside a block, and never open a block with bare backticks.\n\
+- A command goes in its own block: ```run on the first line, the command on the second line, \
+then closing backticks. Never write a command as plain text.\n\
+- Do not write a file path as a heading above the block.\n\
 - SEARCH must match the current file exactly (including indentation) and include 2-3 lines \
 of context so it is unique. You may use several SEARCH/REPLACE pairs in one block.\n\
+- Write every line ONCE. Never repeat a line or a group of lines you already wrote. \
+Do not copy the SEARCH lines into REPLACE more than once.\n\
+- When the last REPLACE is done, write `>>>>>>> REPLACE`, close the fence and STOP.\n\
 - To create a new file leave SEARCH empty. To delete lines leave REPLACE empty.\n\
 - To delete a whole file write a block ```delete path/to/file``` with nothing inside.\n\
 - Only edit files whose contents were provided.\n\
 - To verify your work you may add a block with the info string `run` containing ONE shell \
-command (for example `cargo check`); the user will approve it and you will receive the output.";
+command (for example `cargo check`); the user will approve it and you will receive the output.```";
 
 /// Appended to the system prompt of a single plan step.
 const STEP_RULES: &str = "# This turn: ONE plan step\n\
 You are carrying out a single step of an approved plan. Write exactly ONE fenced block for the \
 file named in the step. Do not touch other files and do not repeat steps that are already done. \
 The file contents below are CURRENT and already include the earlier steps. Do not add `run` \
-blocks and write nothing after the block.\n\
-Use three backticks to open and to close the block. Pick ONE of these two forms:\n\
-A) Short file (under about 80 lines) or a new file: write the COMPLETE new contents of the file:\n\
+blocks and write nothing after the closing fence.\n\
+Write each line of code exactly once. If the change is already present in the file, \
+do not add it again.\n\
+Pick ONE of these two forms:\n\
+A) New file, or a file under about 40 lines: write the COMPLETE new contents:\n\
 ``````edit path/to/file.rs\n\
+<<<<<<< SEARCH\n\
+=======\n\
 (the whole file, with your change included)\n\
+>>>>>>> REPLACE\n\
 `````\n\
-B) Longer file: write SEARCH/REPLACE markers, copying the SEARCH lines exactly from the file:\n\
+B) Longer file: SEARCH/REPLACE with SEARCH copied exactly from the file:\n\
 ````edit path/to/file.rs\n\
 <<<<<<< SEARCH\n\
     let old = 1;\n\
@@ -120,7 +138,7 @@ B) Longer file: write SEARCH/REPLACE markers, copying the SEARCH lines exactly f
     let added = 2;\n\
 >>>>>>> REPLACE\n\
 ```\n\
-Never output only the changed line without markers, and do not wrap the block in another fence. ```";
+Never output only the changed line without the markers.```";
 
 const REPAIR_SYSTEM: &str = "You fix JSON plans for a coding assistant. You get the user's \
 request, the project files, a previous plan and a list of problems found by an automatic checker. \
@@ -171,13 +189,27 @@ pub fn classify(text: &str, has_project: bool) -> Intent {
         "extract",
         "convert",
         "make",
+        "write",
+        "generate",
+        "build",
+        "setup",
+        "install",
+        "integrate",
+        "split",
+        "modify",
+        "edit",
+        "wire",
+        "introduce",
+        "scaffold",
+        "migrate",
     ];
     if QUESTIONS.iter().any(|q| t.starts_with(q)) {
         return Intent::Answer;
     }
-    let has_verb = t
-        .split(|c: char| !c.is_alphabetic())
-        .any(|w| VERBS.contains(&w));
+    // "set up" is two words, so check it separately.
+    let has_verb = t.contains("set up")
+        || t.split(|c: char| !c.is_alphabetic())
+            .any(|w| VERBS.contains(&w));
     if has_verb {
         Intent::Change
     } else {
@@ -312,10 +344,9 @@ pub fn planner_request(cfg: &Config, pending: &Pending) -> ChatRequest {
         messages,
         stream: true,
         think: cfg.planner_think.then_some(true),
-        // Change plans must be JSON that follows the schema. The model's own
-        // temperature is kept: thinking models behave badly at 0.
         format: change.then(plan::schema),
-        options: Options::new(cfg.num_ctx, None),
+        // Model's own temperature is kept (thinking models behave badly at 0).
+        options: Options::new(cfg.num_ctx, None).max_tokens(MAX_PLAN_TOKENS),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -344,7 +375,8 @@ pub fn repair_request(
         stream: false,
         think: Some(false),
         format: Some(plan::schema()),
-        options: Options::new(cfg.num_ctx, Some(0.0)),
+        // 0.0 made small models loop on the same JSON entry.
+        options: Options::new(cfg.num_ctx, Some(0.2)).max_tokens(MAX_PLAN_TOKENS),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -439,10 +471,14 @@ pub fn step_request(cfg: &Config, input: &StepInput) -> ChatRequest {
         user.push_str(&format!(
             "\n# The previous attempt at this step failed\n{error}\n\
              Some blocks may already be applied. The contents above are CURRENT. \
-             Write only the edit that is still missing, with SEARCH copied exactly from them.\n"
+             Write only the edit that is still missing, with SEARCH copied exactly from them. \
+             Do not repeat lines that are already in the file.\n"
         ));
     }
-    user.push_str("\nWrite the edit block for this step now.");
+    user.push_str(
+        "\nWrite the edit block for this step now. Each line once. \
+         Stop right after the closing fence.",
+    );
 
     ChatRequest {
         model: cfg.executor_model.clone(),
@@ -452,13 +488,14 @@ pub fn step_request(cfg: &Config, input: &StepInput) -> ChatRequest {
         format: None,
         options: Options::new(
             cfg.num_ctx,
-            // A retry at 0.1 gives the same wrong answer again, so loosen it up.
+            // Greedy decoding (0.1) loops on small models; a retry needs even more variety.
             Some(if input.retry_error.is_some() {
-                0.6
+                0.7
             } else {
-                0.1
+                0.3
             }),
-        ),
+        )
+        .max_tokens(MAX_STEP_TOKENS),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -482,6 +519,7 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         system.push_str("\n\n# Plan to follow\n");
         system.push_str(plan);
     }
+    system.push_str("\n\nNever repeat a sentence, line of code or block you already wrote.");
 
     let mut messages = vec![ChatMsg::system(system)];
     messages.extend(pending.history.iter().cloned());
@@ -493,7 +531,7 @@ pub fn executor_request(cfg: &Config, pending: &Pending, plan: Option<&str>) -> 
         stream: true,
         think: cfg.executor_think.then_some(true),
         format: None,
-        options: Options::new(cfg.num_ctx, Some(0.2)),
+        options: Options::new(cfg.num_ctx, Some(0.3)).max_tokens(MAX_ANSWER_TOKENS),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -528,7 +566,7 @@ pub fn line_edit_request(
         stream: false,
         think: cfg.executor_think.then_some(true),
         format: None,
-        options: Options::new(cfg.num_ctx, Some(0.1)),
+        options: Options::new(cfg.num_ctx, Some(0.2)).max_tokens(MAX_LINE_TOKENS),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
@@ -562,7 +600,7 @@ pub fn parse_line_edit(reply: &str, original: &str) -> Result<Vec<String>, Strin
     while replacement.first().is_some_and(|l| l.is_empty()) {
         replacement.remove(0);
     }
-    Ok(fix_indent(original, replacement))
+    Ok(fix_indent(original, dedupe_adjacent(replacement)))
 }
 
 /// Models often drop the leading indentation of a single line: restore it.
@@ -647,15 +685,16 @@ pub fn scout_request(cfg: &Config, pending: &Pending) -> ChatRequest {
         model: cfg.planner_model.clone(),
         messages: vec![ChatMsg::system(SCOUT_SYSTEM), ChatMsg::user(user)],
         stream: false,
-        think: Some(false), // a path list needs no long reasoning
+        think: Some(false),
         format: None,
-        options: Options::new(cfg.num_ctx, Some(0.0)),
+        options: Options::new(cfg.num_ctx, Some(0.2)).max_tokens(MAX_SMALL_TOKENS),
         keep_alive: cfg.keep_alive.clone(),
     }
 }
 
 /// Paths from the scout reply. The caller checks that they exist.
 pub fn parse_scout(reply: &str) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
     strip_think_tags(reply)
         .lines()
         .map(|l| {
@@ -670,134 +709,226 @@ pub fn parse_scout(reply: &str) -> Vec<String> {
             s.trim().trim_matches('`').to_string()
         })
         .filter(|s| !s.is_empty())
+        .filter(|s| seen.insert(s.clone()))
         .collect()
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::plan;
+pub fn collapse_repeats(text: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_search = false;
+    let mut in_replace = false;
+    let mut prev: Option<&str> = None;
+    let mut copies = 0usize;
 
-//     fn cfg() -> Config {
-//         Config {
-//             planner_model: "planner".into(),
-//             executor_model: "executor".into(),
-//             num_ctx: 8192,
-//             keep_alive: "10m".into(),
-//             planner_think: true,
-//             executor_think: false,
-//         }
-//     }
+    for line in text.lines() {
+        let t = line.trim();
 
-//     fn pending(intent: Intent) -> Pending {
-//         Pending {
-//             task: "add a clear button".into(),
-//             memory: String::new(),
-//             history: Vec::new(),
-//             project: "Folder: demo".into(),
-//             intent,
-//             instructions: String::new(),
-//         }
-//     }
+        if t.starts_with("<<<<<<<") {
+            in_search = true;
+            in_replace = false;
+            prev = None;
+            out.push(line);
+            continue;
+        }
+        if t.starts_with("=======") {
+            in_search = false;
+            in_replace = true;
+            prev = None;
+            out.push(line);
+            continue;
+        }
+        if t.starts_with(">>>>>>>") {
+            in_search = false;
+            in_replace = false;
+            prev = None;
+            out.push(line);
+            continue;
+        }
+        if in_search {
+            out.push(line);
+            continue;
+        }
 
-//     #[test]
-//     fn change_plans_use_the_schema_answers_do_not() {
-//         let change = planner_request(&cfg(), &pending(Intent::Change));
-//         assert!(change.format.is_some());
-//         assert!(change.messages[0].content.contains("OUTPUT FORMAT"));
-//         let answer = planner_request(&cfg(), &pending(Intent::Answer));
-//         assert!(answer.format.is_none());
-//         assert!(!answer.messages[0].content.contains("OUTPUT FORMAT"));
-//     }
+        let meaningful = t.chars().count() >= 6 && t.chars().any(char::is_alphanumeric);
+        if !meaningful {
+            prev = None;
+            copies = 0;
+            out.push(line);
+            continue;
+        }
 
-//     #[test]
-//     fn request_json_skips_empty_optional_fields() {
-//         let answer = serde_json::to_value(planner_request(&cfg(), &pending(Intent::Answer))).unwrap();
-//         assert!(answer.get("format").is_none());
-//         assert!(answer["options"].get("temperature").is_none());
-//         let repair = serde_json::to_value(repair_request(&cfg(), "t", "ctx", "{}", &["bad".into()])).unwrap();
-//         assert!(repair["format"]["properties"]["steps"].is_object());
-//         assert_eq!(repair["options"]["temperature"], 0.0);
-//         assert_eq!(repair["stream"], false);
-//     }
+        let max_copies = if in_replace { 1 } else { 2 };
+        if prev == Some(line) {
+            copies += 1;
+            if copies > max_copies {
+                continue; // drop the extra copy
+            }
+        } else {
+            prev = Some(line);
+            copies = 1;
+        }
+        out.push(line);
+    }
 
-//     #[test]
-//     fn repair_prompt_lists_the_problems_and_the_context() {
-//         let r = repair_request(&cfg(), "task", "FILE TEXT", "{old}", &["Step 1: bad path".into()]);
-//         let user = &r.messages[1].content;
-//         assert!(user.contains("- Step 1: bad path"));
-//         assert!(user.contains("FILE TEXT"));
-//         assert!(user.contains("{old}"));
-//     }
+    let mut s = out.join("\n");
+    if text.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
 
-//     fn sample_step() -> Step {
-//         Step {
-//             id: 2,
-//             file: "src/ui.rs".into(),
-//             is_new: false,
-//             target: "fn view".into(),
-//             anchor: "pub fn view(app: &App)".into(),
-//             change: "add the button".into(),
-//             depends_on: vec![1],
-//             verify: None,
-//         }
-//     }
+/// True when the tail of a (still streaming) reply is a loop: the same line 4+ times,
+/// or the same block of 2-4 lines 3+ times in a row.
+pub fn looks_looping(text: &str) -> bool {
+    let lines: Vec<&str> = text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .take(24)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
 
-//     #[test]
-//     fn step_prompt_is_scoped_to_one_step() {
-//         let step = sample_step();
-//         let done = vec!["1. src/msg.rs: add Clear variant".to_string()];
-//         let input = StepInput {
-//             project_name: "demo",
-//             instructions: "",
-//             task: "add a clear button",
-//             goal: "Clear button",
-//             step: &step,
-//             total: 3,
-//             done: &done,
-//             file_ctx: "### src/ui.rs\n```rust\nfn view() {}\n```\n\n",
-//             retry_error: None,
-//         };
-//         let r = step_request(&cfg(), &input);
-//         assert_eq!(r.model, "executor");
-//         assert!(r.stream && r.format.is_none());
-//         assert_eq!(r.messages.len(), 2); // system + user, no history
-//         assert!(r.messages[0].content.contains("ONE plan step"));
-//         let user = &r.messages[1].content;
-//         assert!(user.contains("# Current step 2/3"));
-//         assert!(user.contains("- 1. src/msg.rs: add Clear variant"));
-//         assert!(user.contains("Anchor line: pub fn view(app: &App)"));
-//         assert!(user.contains("# Current contents of src/ui.rs"));
-//         assert!(!user.contains("previous attempt"));
-//     }
+    for period in 1..=4usize {
+        let reps = if period == 1 { 4 } else { 3 };
+        let need = period * reps;
+        if lines.len() < need {
+            continue;
+        }
+        let tail = &lines[lines.len() - need..];
+        let block = &tail[..period];
+        let substantial = block.iter().map(|l| l.chars().count()).sum::<usize>() >= 6
+            && block.iter().any(|l| l.chars().any(char::is_alphanumeric));
+        if substantial && tail.chunks(period).all(|c| c == block) {
+            return true;
+        }
+    }
+    false
+}
 
-//     #[test]
-//     fn step_prompt_handles_new_files_and_retries() {
-//         let mut step = sample_step();
-//         step.is_new = true;
-//         let input = StepInput {
-//             project_name: "demo",
-//             instructions: "Use tabs.",
-//             task: "t",
-//             goal: "",
-//             step: &step,
-//             total: 1,
-//             done: &[],
-//             file_ctx: "",
-//             retry_error: Some("SEARCH text not found"),
-//         };
-//         let r = step_request(&cfg(), &input);
-//         assert!(r.messages[0].content.contains("Use tabs."));
-//         let user = &r.messages[1].content;
-//         assert!(user.contains("(nothing yet)"));
-//         assert!(user.contains("SEARCH is empty"));
-//         assert!(user.contains("SEARCH text not found"));
-//     }
+/// Remove identical neighbouring lines from a short replacement.
+fn dedupe_adjacent(lines: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    for l in lines {
+        let t = l.trim();
+        let meaningful = t.chars().count() >= 6 && t.chars().any(char::is_alphanumeric);
+        if meaningful && out.last().is_some_and(|p| *p == l) {
+            continue;
+        }
+        out.push(l);
+    }
+    out
+}
 
-//     #[test]
-//     fn a_plan_parsed_from_the_planner_reply_survives_the_round_trip() {
-//         let reply = r#"{"goal":"g","steps":[{"id":1,"file":"a.rs","is_new":true,"target":"","anchor":"","change":"make it"}]}"#;
-//         let plan = plan::parse(reply).unwrap();
-//         assert_eq!(plan.steps[0].file, "a.rs");
-//     }
-// }
+/// `edit path`, `delete path` or `run`, as the model may have written it on its own line.
+/// Returns the info string the fence should have (`edit src/a.rs`, `delete a.rs`, `run`).
+fn action_header(line: &str) -> Option<String> {
+    let t = line.trim().trim_matches('`').trim();
+    if t.eq_ignore_ascii_case("run") {
+        return Some("run".to_string());
+    }
+    for kw in ["edit", "delete"] {
+        let n = kw.len() + 1;
+        if t.get(..n)
+            .is_some_and(|h| h[..kw.len()].eq_ignore_ascii_case(kw) && h.ends_with(' '))
+        {
+            let path = t[n..]
+                .trim()
+                .trim_matches(|c| c == '`' || c == '"' || c == '\'');
+            let plausible = !path.is_empty()
+                && !path.contains(char::is_whitespace)
+                && (path.contains('.') || path.contains('/'));
+            if plausible {
+                return Some(format!("{kw} {path}"));
+            }
+        }
+    }
+    None
+}
+
+/// Rebuild the fences small models get wrong, so the action parser can read them:
+///   ```            ->  ```edit path
+///   edit path          <<<<<<< SEARCH ...
+///   <<<<<<< SEARCH
+/// and a block with no fence at all (`edit path` followed by markers).
+/// Well-formed replies pass through unchanged.
+pub fn repair_fences(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 2);
+    let mut in_fence = false;
+    let mut synthetic = false; // we opened this fence ourselves
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let t = line.trim();
+        let ticks = t.chars().take_while(|c| *c == '`').count();
+
+        if in_fence {
+            if synthetic {
+                out.push(line.to_string());
+                if t.starts_with(">>>>>>>") {
+                    out.push("```".to_string());
+                    in_fence = false;
+                    synthetic = false;
+                    // The model may add its own closing fence: swallow it.
+                    if lines
+                        .get(i + 1)
+                        .is_some_and(|l| l.trim().len() >= 3 && l.trim().chars().all(|c| c == '`'))
+                    {
+                        i += 1;
+                    }
+                }
+                i += 1;
+                continue;
+            }
+            if ticks >= 3 && t.chars().all(|c| c == '`') {
+                in_fence = false;
+            }
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        if ticks >= 3 {
+            // Opening fence. A bare one followed by a header line gets the header merged in.
+            if t[ticks..].trim().is_empty() {
+                if let Some(header) = lines.get(i + 1).and_then(|l| action_header(l)) {
+                    out.push(format!("```{header}"));
+                    in_fence = true;
+                    i += 2;
+                    continue;
+                }
+            }
+            in_fence = true;
+            out.push(line.to_string());
+            i += 1;
+            continue;
+        }
+
+        // No fence at all: `edit path` directly followed by a SEARCH marker.
+        if let Some(header) = action_header(line) {
+            let next_is_marker = lines
+                .get(i + 1)
+                .is_some_and(|l| l.trim().starts_with("<<<<<<<"));
+            if header.starts_with("edit ") && next_is_marker {
+                out.push(format!("```{header}"));
+                in_fence = true;
+                synthetic = true;
+                i += 1;
+                continue;
+            }
+        }
+
+        out.push(line.to_string());
+        i += 1;
+    }
+
+    let mut s = out.join("\n");
+    if text.ends_with('\n') {
+        s.push('\n');
+    }
+    s
+}
